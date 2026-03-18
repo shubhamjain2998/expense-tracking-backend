@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import List, Optional
 
@@ -30,3 +31,36 @@ class BudgetPlanOut(BaseModel):
     year: int
     category: str
     allocated_amount: Decimal
+
+
+# ─── Uploads ──────────────────────────────────────────────────────────────────
+
+
+class RawTransactionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    txn_date: datetime
+    description: str
+    amount: Decimal
+    status: str
+
+
+class UploadStatementResponse(BaseModel):
+    inserted: int
+    skipped: int
+    rows: List[RawTransactionOut]
+    warnings: List[str] = []
+
+
+class PreviewRow(BaseModel):
+    txn_date: datetime
+    description: str
+    amount: Decimal
+
+
+class PreviewStatementResponse(BaseModel):
+    would_insert: int
+    skipped: int
+    rows: List[PreviewRow]
+    warnings: List[str] = []
