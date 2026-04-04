@@ -2,6 +2,61 @@
 
 FastAPI backend for a personal finance app that tracks monthly spending against an annual budget. Parses bank/card statement PDFs, auto-categorises transactions using fuzzy matching, supports expense splitting, and exposes analytics endpoints.
 
+**Deployment target:** Backend → Render · Database → Supabase (PostgreSQL)
+
+---
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                        Frontend (Vercel)                     │
+│                     React + Vite + TypeScript                │
+└────────────────────────────┬─────────────────────────────────┘
+                             │ HTTPS / REST
+┌────────────────────────────▼─────────────────────────────────┐
+│                       Backend (Render)                       │
+│                     FastAPI + SQLAlchemy                     │
+│                                                              │
+│  /budget        budget plans per year                        │
+│  /uploads       PDF ingest (pdfplumber, in-memory)           │
+│  /transactions  raw review, auto-categorise, manual process  │
+│  /categories    mapping management + category list           │
+│  /persons       expense-split participants                   │
+│  /dashboard     summary, trend, split-ledger, YTD            │
+└────────────────────────────┬─────────────────────────────────┘
+                             │
+┌────────────────────────────▼─────────────────────────────────┐
+│                     Database (Supabase)                      │
+│                         PostgreSQL                           │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Data Flow
+
+```
+Bank PDF
+   │
+   ▼
+POST /uploads/statement
+   │  pdfplumber parses in-memory
+   ▼
+raw_transactions (status=pending)
+   │
+   ├──► POST /transactions/auto-categorise
+   │        RapidFuzz token_sort_ratio ≥ 80 against category_mappings
+   │        → processed_transactions (status=processed)
+   │
+   └──► POST /transactions/process  (manual)
+            category + split_count + person_ids
+            → processed_transactions
+            → transaction_persons (many-to-many)
+                │
+                ▼
+          GET /dashboard/*
+          summary | monthly-trend | split-ledger | ytd
+```
+
 ---
 
 ## How it works
@@ -58,7 +113,6 @@ backend/
 │       └── dashboard.py     Phase 4 — analytics endpoints
 ├── alembic/             DB migration scripts
 ├── requirements.txt
-├── server.py
 └── .env.example
 ```
 
@@ -93,6 +147,7 @@ backend/
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/uploads/statement` | Upload PDF; returns `{ inserted, skipped, rows }` |
+| `POST` | `/uploads/preview` | Dry-run parse — returns what would be inserted without saving |
 
 ### Phase 3 — Process (`/transactions`, `/categories`, `/persons`)
 
@@ -140,7 +195,32 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-API docs at `http://localhost:8000/docs`.
+API docs: `http://localhost:8000/docs`
+
+---
+
+## Development
+
+### Pre-commit hooks
+
+The repo uses [pre-commit](https://pre-commit.com/) with **black** (formatter) and **flake8** (linter).
+
+Install once after cloning:
+
+```bash
+pre-commit install
+```
+
+Hooks run automatically on `git commit`. If black reformats any files, stage the changes and commit again.
+
+### Creating migrations
+
+After changing `app/models.py`:
+
+```bash
+alembic revision --autogenerate -m "describe the change"
+alembic upgrade head
+```
 
 ---
 
