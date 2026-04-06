@@ -23,6 +23,22 @@ router = APIRouter(prefix="/transactions", tags=["transactions"])
 # ─── Review raw table ─────────────────────────────────────────────────────────
 
 
+@router.get("/processed", response_model=List[ProcessedTransactionOut])
+def get_processed_transactions(
+    year: int,
+    month: Optional[int] = None,
+    category: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    query = select(ProcessedTransaction).where(ProcessedTransaction.year == year)
+    if month is not None:
+        query = query.where(ProcessedTransaction.month == month)
+    if category is not None:
+        query = query.where(ProcessedTransaction.category == category.lower())
+    query = query.order_by(ProcessedTransaction.txn_date)
+    return db.execute(query).scalars().all()
+
+
 @router.get("/raw", response_model=List[RawTransactionOut])
 def get_raw_transactions(
     month: Optional[int] = None,
@@ -173,13 +189,13 @@ def process_transaction(body: ProcessTransactionRequest, db: Session = Depends(g
             )
         ).scalar_one_or_none()
         if existing:
-            existing.category = body.category
+            existing.category = body.category.lower()
             existing.last_used = datetime.now(timezone.utc)
             mapping_id = existing.id
         else:
             new_mapping = CategoryMapping(
                 description_pattern=pattern,
-                category=body.category,
+                category=body.category.lower(),
                 match_count=0,
                 last_used=datetime.now(timezone.utc),
             )
@@ -197,7 +213,7 @@ def process_transaction(body: ProcessTransactionRequest, db: Session = Depends(g
     processed = ProcessedTransaction(
         raw_txn_id=txn.id,
         mapping_id=mapping_id,
-        category=body.category,
+        category=body.category.lower(),
         txn_date=txn_date,
         description=txn.description,
         amount=txn.amount,
@@ -214,6 +230,18 @@ def process_transaction(body: ProcessTransactionRequest, db: Session = Depends(g
     return processed
 
 
+@router.delete("/processed/{id}", status_code=204)
+def delete_processed_transaction(id: uuid.UUID, db: Session = Depends(get_db)):
+    processed = db.get(ProcessedTransaction, id)
+    if processed is None:
+        raise HTTPException(status_code=404, detail="Processed transaction not found")
+    raw = db.get(RawTransaction, processed.raw_txn_id)
+    if raw is not None:
+        raw.status = "pending"
+    db.delete(processed)
+    db.commit()
+
+
 @router.patch("/processed/{id}", response_model=ProcessedTransactionOut)
 def patch_processed_transaction(
     id: uuid.UUID,
@@ -225,7 +253,7 @@ def patch_processed_transaction(
         raise HTTPException(status_code=404, detail="Processed transaction not found")
 
     if body.category is not None:
-        processed.category = body.category
+        processed.category = body.category.lower()
 
     if body.split_count is not None:
         split_count = max(body.split_count, 1)
