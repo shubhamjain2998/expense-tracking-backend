@@ -14,7 +14,7 @@ router = APIRouter(prefix="/budget", tags=["budget"])
 @router.post("", response_model=List[BudgetPlanOut], status_code=201)
 def create_budget(payload: BudgetPlanCreate, db: Session = Depends(get_db)):
     # Check for duplicate categories within the request itself
-    categories = [e.category for e in payload.entries]
+    categories = [e.category.lower() for e in payload.entries]
     if len(categories) != len(set(categories)):
         raise HTTPException(status_code=422, detail="Duplicate categories in request")
 
@@ -32,7 +32,9 @@ def create_budget(payload: BudgetPlanCreate, db: Session = Depends(get_db)):
 
     rows = [
         BudgetPlan(
-            year=payload.year, category=e.category, allocated_amount=e.allocated_amount
+            year=payload.year,
+            category=e.category.lower(),
+            allocated_amount=e.allocated_amount,
         )
         for e in payload.entries
     ]
@@ -64,16 +66,17 @@ def update_budget(
         clash = (
             db.query(BudgetPlan)
             .filter(
-                BudgetPlan.year == row.year, BudgetPlan.category == payload.category
+                BudgetPlan.year == row.year,
+                BudgetPlan.category == payload.category.lower(),
             )
             .first()
         )
         if clash and clash.id != row.id:
             raise HTTPException(
                 status_code=409,
-                detail=f"Category '{payload.category}' already exists for {row.year}",
+                detail=f"Category '{payload.category.lower()}' already exists for {row.year}",  # noqa: E501
             )
-        row.category = payload.category
+        row.category = payload.category.lower()
 
     if payload.allocated_amount is not None:
         row.allocated_amount = payload.allocated_amount
