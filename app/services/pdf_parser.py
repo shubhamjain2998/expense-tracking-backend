@@ -57,6 +57,7 @@ class ParseResult:
     rows: List[ParsedRow] = field(default_factory=list)
     skipped: int = 0
     warnings: List[str] = field(default_factory=list)
+    skipped_rows: List[str] = field(default_factory=list)
 
 
 # ─── Date parsing ─────────────────────────────────────────────────────────────
@@ -607,7 +608,7 @@ def _is_transaction_table(table: List[List[str]]) -> bool:
 def _parse_table(
     table: List[List[str]],
     fallback_col_map: Optional[ColumnMap] = None,
-) -> Tuple[List[ParsedRow], int, Optional[ColumnMap]]:
+) -> Tuple[List[ParsedRow], int, Optional[ColumnMap], List[str]]:
     """
     Parse a cleaned table (None cells already replaced with '') into ParsedRows.
 
@@ -618,13 +619,14 @@ def _parse_table(
             (continuation pages in multi-page bank statements).
 
     Returns:
-        (rows, skipped_count, col_map_used)
+        (rows, skipped_count, col_map_used, skipped_rows)
     """
     rows: List[ParsedRow] = []
     skipped = 0
+    skipped_rows: List[str] = []
 
     if not table:
-        return rows, skipped, None
+        return rows, skipped, None, skipped_rows
 
     header_idx, col_map = _find_header_row(table)
 
@@ -637,7 +639,7 @@ def _parse_table(
             col_map = _detect_columns_by_heuristic(table)
 
     if col_map is None:
-        return rows, len(table), None
+        return rows, len(table), None, skipped_rows
 
     ncols = max(len(row) for row in table) if table else 1
     start_row = (header_idx + 1) if header_idx is not None else 0
@@ -651,11 +653,14 @@ def _parse_table(
             continue
 
         if is_single_col:
-            parsed = _parse_single_column_row((row[0] or "").strip())
+            cell = (row[0] or "").strip()
+            parsed = _parse_single_column_row(cell)
             if parsed is not None:
                 rows.append(parsed)
             else:
                 skipped += 1
+                summary = " ".join(cell.splitlines())[:80]
+                skipped_rows.append(summary)
         else:
             # Attempt to expand merged rows (multiple transactions in one row)
             expanded = _try_expand_merged_row(row, col_map)
@@ -665,8 +670,10 @@ def _parse_table(
                     rows.append(parsed)
                 else:
                     skipped += 1
+                    parts = [c.strip() for c in exp_row if (c or "").strip()]
+                    skipped_rows.append(" | ".join(parts)[:120])
 
-    return rows, skipped, col_map
+    return rows, skipped, col_map, skipped_rows
 
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
@@ -701,7 +708,7 @@ def parse_bank_statement(pdf_bytes: bytes) -> ParseResult:
                     result.skipped += len(table)
                     continue
 
-                page_rows, page_skipped, used_col_map = _parse_table(
+                page_rows, page_skipped, used_col_map, page_skipped_rows = _parse_table(
                     table, fallback_col_map=last_col_map
                 )
 
@@ -711,6 +718,7 @@ def parse_bank_statement(pdf_bytes: bytes) -> ParseResult:
 
                 result.rows.extend(page_rows)
                 result.skipped += page_skipped
+                result.skipped_rows.extend(page_skipped_rows)
 
     # ── De-duplicate exact rows (same date + description + amount) ────────────
     seen: set = set()

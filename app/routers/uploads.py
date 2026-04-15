@@ -6,12 +6,14 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import RawTransaction
 from app.schemas import (
+    ParseTextRequest,
     PreviewRow,
     PreviewStatementResponse,
     RawTransactionOut,
     UploadStatementResponse,
 )
 from app.services.pdf_parser import parse_bank_statement
+from app.services.text_parser import parse_bank_statement_text
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
 
@@ -90,6 +92,7 @@ async def upload_statement(
     return UploadStatementResponse(
         inserted=len(db_rows),
         skipped=result.skipped,
+        skipped_rows=result.skipped_rows,
         rows=[RawTransactionOut.model_validate(txn) for txn in db_rows],
         warnings=result.warnings,
     )
@@ -123,6 +126,7 @@ async def preview_statement(
     return PreviewStatementResponse(
         would_insert=len(result.rows),
         skipped=result.skipped,
+        skipped_rows=result.skipped_rows,
         rows=[
             PreviewRow(
                 txn_date=r.txn_date,
@@ -131,5 +135,78 @@ async def preview_statement(
             )
             for r in result.rows
         ],
+        warnings=result.warnings,
+    )
+
+
+# ── POST /uploads/preview-text ────────────────────────────────────────────────
+
+
+@router.post("/preview-text", response_model=PreviewStatementResponse)
+def preview_text(body: ParseTextRequest) -> PreviewStatementResponse:
+    """
+    Dry-run: parse pasted bank statement text and return what *would* be
+    inserted without touching the database.
+    """
+    result = parse_bank_statement_text(body.text)
+    return PreviewStatementResponse(
+        would_insert=len(result.rows),
+        skipped=result.skipped,
+        skipped_rows=result.skipped_rows,
+        rows=[
+            PreviewRow(
+                txn_date=r.txn_date,
+                description=r.description,
+                amount=Decimal(str(r.amount)),
+            )
+            for r in result.rows
+        ],
+        warnings=result.warnings,
+    )
+
+
+# ── POST /uploads/text-import ─────────────────────────────────────────────────
+
+
+@router.post("/text-import", response_model=UploadStatementResponse, status_code=201)
+def text_import(
+    body: ParseTextRequest, db: Session = Depends(get_db)
+) -> UploadStatementResponse:
+    """
+    Parse pasted bank statement text and persist all extracted transactions as
+    raw_transactions with status='pending'.
+    """
+    result = parse_bank_statement_text(body.text)
+
+    if not result.rows:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No transactions could be extracted from the provided text. "
+                f"Rows skipped: {result.skipped}. "
+                "Ensure it is a supported bank statement format."
+            ),
+        )
+
+    db_rows: list[RawTransaction] = []
+    for row in result.rows:
+        txn = RawTransaction(
+            txn_date=row.txn_date,
+            description=row.description,
+            amount=Decimal(str(row.amount)),
+            status="pending",
+        )
+        db.add(txn)
+        db_rows.append(txn)
+
+    db.commit()
+    for txn in db_rows:
+        db.refresh(txn)
+
+    return UploadStatementResponse(
+        inserted=len(db_rows),
+        skipped=result.skipped,
+        skipped_rows=result.skipped_rows,
+        rows=[RawTransactionOut.model_validate(txn) for txn in db_rows],
         warnings=result.warnings,
     )
