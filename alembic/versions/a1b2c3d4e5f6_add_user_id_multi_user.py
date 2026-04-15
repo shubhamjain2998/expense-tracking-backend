@@ -16,7 +16,7 @@ Backfill strategy for existing rows:
   pre-existing rows so that the NOT NULL constraint can be applied immediately.
   On a fresh development database, drop & recreate instead.
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: a2b3c4d5e6f7
 Revises: f7a8b9c0d1e2
 Create Date: 2026-04-15
 """
@@ -26,7 +26,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "a1b2c3d4e5f6"
+revision: str = "a2b3c4d5e6f7"
 down_revision: Union[str, None] = "f7a8b9c0d1e2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
