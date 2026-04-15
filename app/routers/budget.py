@@ -2,10 +2,11 @@ import uuid
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import BudgetPlan
+from app.models import BudgetPlan, Category
 from app.schemas import BudgetPlanCreate, BudgetPlanOut, BudgetPlanUpdate
 
 router = APIRouter(prefix="/budget", tags=["budget"])
@@ -13,27 +14,34 @@ router = APIRouter(prefix="/budget", tags=["budget"])
 
 @router.post("", response_model=List[BudgetPlanOut], status_code=201)
 def create_budget(payload: BudgetPlanCreate, db: Session = Depends(get_db)):
-    # Check for duplicate categories within the request itself
-    categories = [e.category.lower() for e in payload.entries]
-    if len(categories) != len(set(categories)):
+    category_ids = [e.category_id for e in payload.entries]
+
+    if len(category_ids) != len(set(category_ids)):
         raise HTTPException(status_code=422, detail="Duplicate categories in request")
 
+    # Validate all categories exist
+    for cid in category_ids:
+        if db.get(Category, cid) is None:
+            raise HTTPException(status_code=404, detail=f"Category {cid} not found")
+
     # Check for conflicts with existing rows for this year
-    existing = (
-        db.query(BudgetPlan.category).filter(BudgetPlan.year == payload.year).all()
-    )
-    existing_categories = {row.category for row in existing}
-    conflicts = [c for c in categories if c in existing_categories]
+    existing_ids = {
+        row.category_id
+        for row in db.execute(
+            select(BudgetPlan.category_id).where(BudgetPlan.year == payload.year)
+        ).all()
+    }
+    conflicts = [str(cid) for cid in category_ids if cid in existing_ids]
     if conflicts:
         raise HTTPException(
             status_code=409,
-            detail=f"Categories already exist for {payload.year}: {conflicts}",
+            detail=f"Budget entries already exist for year {payload.year}: {conflicts}",
         )
 
     rows = [
         BudgetPlan(
             year=payload.year,
-            category=e.category.lower(),
+            category_id=e.category_id,
             allocated_amount=e.allocated_amount,
         )
         for e in payload.entries
@@ -42,15 +50,15 @@ def create_budget(payload: BudgetPlanCreate, db: Session = Depends(get_db)):
     db.commit()
     for row in rows:
         db.refresh(row)
-    return rows
+    return [BudgetPlanOut.from_orm(r) for r in rows]
 
 
 @router.get("/{year}", response_model=List[BudgetPlanOut])
 def get_budget(year: int, db: Session = Depends(get_db)):
-    rows = db.query(BudgetPlan).filter(BudgetPlan.year == year).all()
+    rows = db.execute(select(BudgetPlan).where(BudgetPlan.year == year)).scalars().all()
     if not rows:
         raise HTTPException(status_code=404, detail=f"No budget found for year {year}")
-    return rows
+    return [BudgetPlanOut.from_orm(r) for r in rows]
 
 
 @router.put("/{id}", response_model=BudgetPlanOut)
@@ -61,29 +69,31 @@ def update_budget(
     if not row:
         raise HTTPException(status_code=404, detail="Budget entry not found")
 
-    if payload.category is not None:
-        # Ensure the new category name doesn't clash with another row in the same year
-        clash = (
-            db.query(BudgetPlan)
-            .filter(
-                BudgetPlan.year == row.year,
-                BudgetPlan.category == payload.category.lower(),
+    if payload.category_id is not None:
+        if db.get(Category, payload.category_id) is None:
+            raise HTTPException(
+                status_code=404, detail=f"Category {payload.category_id} not found"
             )
-            .first()
-        )
+        # Ensure no other budget entry for this year already uses the new category
+        clash = db.execute(
+            select(BudgetPlan).where(
+                BudgetPlan.year == row.year,
+                BudgetPlan.category_id == payload.category_id,
+            )
+        ).scalar_one_or_none()
         if clash and clash.id != row.id:
             raise HTTPException(
                 status_code=409,
-                detail=f"Category '{payload.category.lower()}' already exists for {row.year}",  # noqa: E501
+                detail=f"A budget entry for this category already exists in {row.year}",
             )
-        row.category = payload.category.lower()
+        row.category_id = payload.category_id
 
     if payload.allocated_amount is not None:
         row.allocated_amount = payload.allocated_amount
 
     db.commit()
     db.refresh(row)
-    return row
+    return BudgetPlanOut.from_orm(row)
 
 
 @router.delete("/{id}", status_code=204)

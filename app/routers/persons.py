@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Person, transaction_persons
+from app.models import Person, TransactionPersonShare
 from app.schemas import PersonCreate, PersonOut
 
 router = APIRouter(prefix="/persons", tags=["persons"])
@@ -41,7 +41,7 @@ def delete_person(id: uuid.UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Person not found")
 
     linked = db.execute(
-        select(transaction_persons).where(transaction_persons.c.person_id == id)
+        select(TransactionPersonShare).where(TransactionPersonShare.person_id == id)
     ).first()
     if linked:
         raise HTTPException(

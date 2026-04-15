@@ -5,11 +5,14 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import (
     BudgetPlan,
+    Category,
     CategoryMapping,
     Person,
     ProcessedTransaction,
     RawTransaction,
-    transaction_persons,
+    Tag,
+    TransactionPersonShare,
+    transaction_tags,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -23,7 +26,9 @@ def delete_all_raw_transactions(db: Session = Depends(get_db)):
 
 @router.delete("/transactions/processed", status_code=204)
 def delete_all_processed_transactions(db: Session = Depends(get_db)):
-    db.execute(delete(transaction_persons))
+    # Shares cascade from ProcessedTransaction, but explicit delete is safer
+    # with bulk ops
+    db.execute(delete(TransactionPersonShare))
     db.execute(delete(ProcessedTransaction))
     db.execute(delete(RawTransaction))
     db.commit()
@@ -43,17 +48,20 @@ def delete_all_budget_plans(db: Session = Depends(get_db)):
 
 @router.delete("/persons", status_code=204)
 def delete_all_persons(db: Session = Depends(get_db)):
-    db.execute(delete(transaction_persons))
+    db.execute(delete(TransactionPersonShare))
     db.execute(delete(Person))
     db.commit()
 
 
 @router.delete("/all", status_code=204)
 def delete_everything(db: Session = Depends(get_db)):
-    db.execute(delete(transaction_persons))
+    db.execute(transaction_tags.delete())
+    db.execute(delete(TransactionPersonShare))
     db.execute(delete(ProcessedTransaction))
     db.execute(delete(RawTransaction))
     db.execute(delete(CategoryMapping))
     db.execute(delete(BudgetPlan))
     db.execute(delete(Person))
+    db.execute(delete(Tag))
+    db.execute(delete(Category))
     db.commit()

@@ -6,8 +6,10 @@ from app.routers import (
     uploads,
     transactions,
     categories,
+    category_mappings,
     persons,
     dashboard,
+    tags,
 )
 
 app = FastAPI(title="Expense Tracker API")
@@ -31,8 +33,10 @@ app.include_router(budget.router)
 app.include_router(uploads.router)
 app.include_router(transactions.router)
 app.include_router(categories.router)
+app.include_router(category_mappings.router)
 app.include_router(persons.router)
 app.include_router(dashboard.router)
+app.include_router(tags.router)
 
 
 @app.get("/health")

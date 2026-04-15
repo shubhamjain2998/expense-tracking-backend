@@ -1,16 +1,48 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+
+# ─── Categories ───────────────────────────────────────────────────────────────
+
+
+class CategoryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+
+
+class CategoryCreate(BaseModel):
+    name: str
+
+
+class CategoryRename(BaseModel):
+    name: str
+
+
+# ─── Tags ─────────────────────────────────────────────────────────────────────
+
+
+class TagOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+
+
+class TagCreate(BaseModel):
+    name: str
 
 
 # ─── Budget ───────────────────────────────────────────────────────────────────
 
 
 class BudgetEntryCreate(BaseModel):
-    category: str
+    category_id: uuid.UUID
     allocated_amount: Decimal
 
 
@@ -20,7 +52,7 @@ class BudgetPlanCreate(BaseModel):
 
 
 class BudgetPlanUpdate(BaseModel):
-    category: Optional[str] = None
+    category_id: Optional[uuid.UUID] = None
     allocated_amount: Optional[Decimal] = None
 
 
@@ -29,8 +61,19 @@ class BudgetPlanOut(BaseModel):
 
     id: uuid.UUID
     year: int
-    category: str
+    category_id: uuid.UUID
+    category: str  # derived from relationship
     allocated_amount: Decimal
+
+    @classmethod
+    def from_orm(cls, row: object) -> "BudgetPlanOut":
+        return cls(
+            id=row.id,
+            year=row.year,
+            category_id=row.category_id,
+            category=row.category.name,
+            allocated_amount=Decimal(str(row.allocated_amount)),
+        )
 
 
 # ─── Uploads ──────────────────────────────────────────────────────────────────
@@ -49,6 +92,7 @@ class RawTransactionOut(BaseModel):
 class UploadStatementResponse(BaseModel):
     inserted: int
     skipped: int
+    skipped_rows: List[str] = []
     rows: List[RawTransactionOut]
     warnings: List[str] = []
 
@@ -62,18 +106,68 @@ class PreviewRow(BaseModel):
 class PreviewStatementResponse(BaseModel):
     would_insert: int
     skipped: int
+    skipped_rows: List[str] = []
     rows: List[PreviewRow]
     warnings: List[str] = []
+
+
+class ParseTextRequest(BaseModel):
+    text: str
+
+
+class CreateRawTransactionRequest(BaseModel):
+    txn_date: datetime
+    description: str
+    amount: Decimal
+
+    @field_validator("amount")
+    @classmethod
+    def amount_must_be_positive(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("amount must be greater than 0")
+        return v
 
 
 # ─── Transactions ─────────────────────────────────────────────────────────────
 
 
-class PersonOut(BaseModel):
+class PersonShareIn(BaseModel):
+    person_id: uuid.UUID
+    share_type: Literal["percentage", "amount"]
+    share_value: Decimal  # 0-100 if percentage, exact dollars if amount
+
+    @field_validator("share_value")
+    @classmethod
+    def share_value_must_be_positive(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("share_value must be greater than 0")
+        return v
+
+
+class PersonShareOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: uuid.UUID
-    name: str
+    person_id: uuid.UUID
+    person_name: str
+    share_type: str
+    share_value: Decimal
+    share_amount: Decimal
+    settled: bool
+
+    @classmethod
+    def from_orm_share(cls, share: object) -> "PersonShareOut":
+        return cls(
+            person_id=share.person_id,
+            person_name=share.person.name,
+            share_type=share.share_type,
+            share_value=Decimal(str(share.share_value)),
+            share_amount=Decimal(str(share.share_amount)),
+            settled=share.settled,
+        )
+
+
+class PatchShareSettledRequest(BaseModel):
+    settled: bool
 
 
 class ProcessedTransactionOut(BaseModel):
@@ -82,29 +176,54 @@ class ProcessedTransactionOut(BaseModel):
     id: uuid.UUID
     raw_txn_id: uuid.UUID
     mapping_id: Optional[uuid.UUID]
-    category: str
+    category_id: uuid.UUID
+    category: str  # derived from relationship
     txn_date: date
     description: str
     amount: Decimal
     effective_amount: Decimal
-    split_count: int
     month: int
     year: int
-    persons: List[PersonOut] = []
+    notes: Optional[str]
+    shares: List[PersonShareOut] = []
+    tags: List[TagOut] = []
+
+    @classmethod
+    def from_orm(cls, txn: object) -> "ProcessedTransactionOut":
+        return cls(
+            id=txn.id,
+            raw_txn_id=txn.raw_txn_id,
+            mapping_id=txn.mapping_id,
+            category_id=txn.category_id,
+            category=txn.category.name,
+            txn_date=txn.txn_date,
+            description=txn.description,
+            amount=Decimal(str(txn.amount)),
+            effective_amount=Decimal(str(txn.effective_amount)),
+            month=txn.month,
+            year=txn.year,
+            notes=txn.notes,
+            shares=[PersonShareOut.from_orm_share(s) for s in txn.shares],
+            tags=[TagOut(id=t.id, name=t.name) for t in txn.tags],
+        )
 
 
 class ProcessTransactionRequest(BaseModel):
     raw_txn_id: uuid.UUID
-    category: str
+    category_id: uuid.UUID
     save_mapping: bool = False
-    split_count: int = 1
-    person_ids: List[uuid.UUID] = []
+    shares: List[PersonShareIn] = []
+    notes: Optional[str] = None
 
 
 class PatchProcessedTransactionRequest(BaseModel):
-    category: Optional[str] = None
-    split_count: Optional[int] = None
-    person_ids: Optional[List[uuid.UUID]] = None
+    category_id: Optional[uuid.UUID] = None
+    txn_date: Optional[date] = None
+    amount: Optional[Decimal] = None
+    description: Optional[str] = None
+    notes: Optional[str] = None
+    shares: Optional[List[PersonShareIn]] = None
+    tag_ids: Optional[List[uuid.UUID]] = None
     save_mapping: Optional[bool] = None
 
 
@@ -121,12 +240,31 @@ class CategoryMappingOut(BaseModel):
 
     id: uuid.UUID
     description_pattern: str
-    category: str
+    category_id: uuid.UUID
+    category: str  # derived from relationship
     match_count: int
     last_used: Optional[datetime]
 
+    @classmethod
+    def from_orm(cls, m: object) -> "CategoryMappingOut":
+        return cls(
+            id=m.id,
+            description_pattern=m.description_pattern,
+            category_id=m.category_id,
+            category=m.category.name,
+            match_count=m.match_count,
+            last_used=m.last_used,
+        )
+
 
 # ─── Persons ──────────────────────────────────────────────────────────────────
+
+
+class PersonOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
 
 
 class PersonCreate(BaseModel):

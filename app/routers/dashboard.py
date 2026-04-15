@@ -6,7 +6,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import BudgetPlan, Person, ProcessedTransaction, transaction_persons
+from app.models import (
+    BudgetPlan,
+    Category,
+    Person,
+    ProcessedTransaction,
+    TransactionPersonShare,
+)
 from app.schemas import MonthlyTrendRow, SplitLedgerRow, SummaryRow, YTDRow
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -17,26 +23,25 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 @router.get("/summary", response_model=List[SummaryRow])
 def summary(year: int, month: int, db: Session = Depends(get_db)):
-    # Budget rows for the year (annual amount → monthly = /12)
     budget_rows = db.execute(
-        select(BudgetPlan.category, BudgetPlan.allocated_amount).where(
-            BudgetPlan.year == year
-        )
+        select(Category.name, BudgetPlan.allocated_amount)
+        .join(Category, Category.id == BudgetPlan.category_id)
+        .where(BudgetPlan.year == year)
     ).all()
     budget_map = {
-        row.category: Decimal(str(row.allocated_amount)) / 12 for row in budget_rows
+        row.name: Decimal(str(row.allocated_amount)) / 12 for row in budget_rows
     }
 
-    # Actual spend for the month
     actual_rows = db.execute(
         select(
-            ProcessedTransaction.category,
+            Category.name,
             func.sum(ProcessedTransaction.effective_amount).label("actual"),
         )
+        .join(Category, Category.id == ProcessedTransaction.category_id)
         .where(ProcessedTransaction.year == year, ProcessedTransaction.month == month)
-        .group_by(ProcessedTransaction.category)
+        .group_by(Category.name)
     ).all()
-    actual_map = {row.category: Decimal(str(row.actual)) for row in actual_rows}
+    actual_map = {row.name: Decimal(str(row.actual)) for row in actual_rows}
 
     all_categories = set(budget_map) | set(actual_map)
     result = []
@@ -63,7 +68,7 @@ def summary(year: int, month: int, db: Session = Depends(get_db)):
 @router.get("/monthly-trend", response_model=List[MonthlyTrendRow])
 def monthly_trend(
     year: int,
-    category: Optional[str] = None,
+    category_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     query = (
@@ -75,8 +80,8 @@ def monthly_trend(
         .group_by(ProcessedTransaction.month)
         .order_by(ProcessedTransaction.month)
     )
-    if category is not None:
-        query = query.where(ProcessedTransaction.category == category)
+    if category_id is not None:
+        query = query.where(ProcessedTransaction.category_id == category_id)
 
     rows = db.execute(query).all()
     return [
@@ -89,21 +94,29 @@ def monthly_trend(
 
 
 @router.get("/split-ledger", response_model=List[SplitLedgerRow])
-def split_ledger(month: int, year: int, db: Session = Depends(get_db)):
-    rows = db.execute(
+def split_ledger(
+    month: int,
+    year: int,
+    include_settled: bool = False,
+    db: Session = Depends(get_db),
+):
+    query = (
         select(
             Person.name.label("person_name"),
-            func.sum(ProcessedTransaction.effective_amount).label("total_split_amount"),
+            func.sum(TransactionPersonShare.share_amount).label("total_split_amount"),
         )
-        .join(transaction_persons, transaction_persons.c.person_id == Person.id)
+        .join(TransactionPersonShare, TransactionPersonShare.person_id == Person.id)
         .join(
             ProcessedTransaction,
-            ProcessedTransaction.id == transaction_persons.c.processed_txn_id,
+            ProcessedTransaction.id == TransactionPersonShare.processed_txn_id,
         )
         .where(ProcessedTransaction.year == year, ProcessedTransaction.month == month)
         .group_by(Person.name)
         .order_by(Person.name)
-    ).all()
+    )
+    if not include_settled:
+        query = query.where(TransactionPersonShare.settled.is_(False))
+    rows = db.execute(query).all()
 
     return [
         SplitLedgerRow(
@@ -120,23 +133,22 @@ def split_ledger(month: int, year: int, db: Session = Depends(get_db)):
 @router.get("/ytd", response_model=List[YTDRow])
 def ytd(year: int, db: Session = Depends(get_db)):
     budget_rows = db.execute(
-        select(BudgetPlan.category, BudgetPlan.allocated_amount).where(
-            BudgetPlan.year == year
-        )
+        select(Category.name, BudgetPlan.allocated_amount)
+        .join(Category, Category.id == BudgetPlan.category_id)
+        .where(BudgetPlan.year == year)
     ).all()
-    budget_map = {
-        row.category: Decimal(str(row.allocated_amount)) for row in budget_rows
-    }
+    budget_map = {row.name: Decimal(str(row.allocated_amount)) for row in budget_rows}
 
     actual_rows = db.execute(
         select(
-            ProcessedTransaction.category,
+            Category.name,
             func.sum(ProcessedTransaction.effective_amount).label("actual"),
         )
+        .join(Category, Category.id == ProcessedTransaction.category_id)
         .where(ProcessedTransaction.year == year)
-        .group_by(ProcessedTransaction.category)
+        .group_by(Category.name)
     ).all()
-    actual_map = {row.category: Decimal(str(row.actual)) for row in actual_rows}
+    actual_map = {row.name: Decimal(str(row.actual)) for row in actual_rows}
 
     all_categories = set(budget_map) | set(actual_map)
     result = []
