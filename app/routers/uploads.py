@@ -1,8 +1,10 @@
+import uuid
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.database import get_db
 from app.models import RawTransaction
 from app.schemas import (
@@ -41,13 +43,11 @@ def _require_pdf(file: UploadFile) -> None:
 async def upload_statement(
     file: UploadFile = File(..., description="Bank statement PDF"),
     db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
 ) -> UploadStatementResponse:
     """
     Parse a bank-statement PDF and persist all extracted transactions as
     raw_transactions with status='pending'.
-
-    - Reads the file entirely in memory — never written to disk.
-    - Returns inserted count, skipped count, every inserted row, and any warnings.
     """
     _require_pdf(file)
 
@@ -73,10 +73,10 @@ async def upload_statement(
             ),
         )
 
-    # ── Persist ───────────────────────────────────────────────────────────────
     db_rows: list[RawTransaction] = []
     for row in result.rows:
         txn = RawTransaction(
+            user_id=user_id,
             txn_date=row.txn_date,
             description=row.description,
             amount=Decimal(str(row.amount)),
@@ -98,16 +98,17 @@ async def upload_statement(
     )
 
 
-# ── GET /uploads/preview ──────────────────────────────────────────────────────
+# ── POST /uploads/preview ──────────────────────────────────────────────────────
 
 
 @router.post("/preview", response_model=PreviewStatementResponse)
 async def preview_statement(
     file: UploadFile = File(..., description="Bank statement PDF"),
+    user_id: uuid.UUID = Depends(get_current_user),
 ) -> PreviewStatementResponse:
     """
     Dry-run: parse the PDF and return what *would* be inserted without
-    touching the database.  Useful for frontend confirmation before commit.
+    touching the database.
     """
     _require_pdf(file)
 
@@ -143,7 +144,10 @@ async def preview_statement(
 
 
 @router.post("/preview-text", response_model=PreviewStatementResponse)
-def preview_text(body: ParseTextRequest) -> PreviewStatementResponse:
+def preview_text(
+    body: ParseTextRequest,
+    user_id: uuid.UUID = Depends(get_current_user),
+) -> PreviewStatementResponse:
     """
     Dry-run: parse pasted bank statement text and return what *would* be
     inserted without touching the database.
@@ -170,7 +174,9 @@ def preview_text(body: ParseTextRequest) -> PreviewStatementResponse:
 
 @router.post("/text-import", response_model=UploadStatementResponse, status_code=201)
 def text_import(
-    body: ParseTextRequest, db: Session = Depends(get_db)
+    body: ParseTextRequest,
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
 ) -> UploadStatementResponse:
     """
     Parse pasted bank statement text and persist all extracted transactions as
@@ -191,6 +197,7 @@ def text_import(
     db_rows: list[RawTransaction] = []
     for row in result.rows:
         txn = RawTransaction(
+            user_id=user_id,
             txn_date=row.txn_date,
             description=row.description,
             amount=Decimal(str(row.amount)),

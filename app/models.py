@@ -12,6 +12,7 @@ from sqlalchemy import (
     Table,
     Column,
     DateTime,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
@@ -27,11 +28,15 @@ class Category(Base):
     """
 
     __tablename__ = "categories"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_categories_user_name"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
 
     budget_plans: Mapped[List["BudgetPlan"]] = relationship(back_populates="category")
     processed_transactions: Mapped[List["ProcessedTransaction"]] = relationship(
@@ -70,11 +75,13 @@ class Tag(Base):
     """
 
     __tablename__ = "tags"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_tags_user_name"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
 
     processed_transactions: Mapped[List["ProcessedTransaction"]] = relationship(
         secondary=transaction_tags, back_populates="tags"
@@ -127,6 +134,7 @@ class BudgetPlan(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     category_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False
@@ -145,6 +153,7 @@ class RawTransaction(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     txn_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     description: Mapped[str] = mapped_column(String, nullable=False)
     amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
@@ -162,13 +171,17 @@ class RawTransaction(Base):
 
 class CategoryMapping(Base):
     __tablename__ = "category_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "description_pattern", name="uq_category_mappings_user_pattern"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    description_pattern: Mapped[str] = mapped_column(
-        String, nullable=False, unique=True
-    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    description_pattern: Mapped[str] = mapped_column(String, nullable=False)
     category_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False
     )
@@ -186,11 +199,13 @@ class CategoryMapping(Base):
 
 class Person(Base):
     __tablename__ = "persons"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_persons_user_name"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
 
     shares: Mapped[List["TransactionPersonShare"]] = relationship(
         back_populates="person"
@@ -206,6 +221,7 @@ class ProcessedTransaction(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     raw_txn_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("raw_transactions.id"), nullable=False
     )

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.database import get_db
 from app.models import BudgetPlan, Category, CategoryMapping, ProcessedTransaction
 from app.schemas import CategoryCreate, CategoryOut, CategoryRename
@@ -13,19 +14,32 @@ router = APIRouter(prefix="/categories", tags=["categories"])
 
 
 @router.get("", response_model=List[CategoryOut])
-def list_categories(db: Session = Depends(get_db)):
-    return db.execute(select(Category).order_by(Category.name)).scalars().all()
+def list_categories(
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+):
+    return (
+        db.execute(
+            select(Category).where(Category.user_id == user_id).order_by(Category.name)
+        )
+        .scalars()
+        .all()
+    )
 
 
 @router.post("", response_model=CategoryOut, status_code=201)
-def create_category(body: CategoryCreate, db: Session = Depends(get_db)):
+def create_category(
+    body: CategoryCreate,
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+):
     name = body.name.strip().lower()
     existing = db.execute(
-        select(Category).where(Category.name == name)
+        select(Category).where(Category.user_id == user_id, Category.name == name)
     ).scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=409, detail=f"Category '{name}' already exists")
-    category = Category(name=name)
+    category = Category(user_id=user_id, name=name)
     db.add(category)
     db.commit()
     db.refresh(category)
@@ -33,13 +47,20 @@ def create_category(body: CategoryCreate, db: Session = Depends(get_db)):
 
 
 @router.patch("/{id}", response_model=CategoryOut)
-def rename_category(id: uuid.UUID, body: CategoryRename, db: Session = Depends(get_db)):
-    category = db.get(Category, id)
+def rename_category(
+    id: uuid.UUID,
+    body: CategoryRename,
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+):
+    category = db.execute(
+        select(Category).where(Category.id == id, Category.user_id == user_id)
+    ).scalar_one_or_none()
     if category is None:
         raise HTTPException(status_code=404, detail="Category not found")
     name = body.name.strip().lower()
     clash = db.execute(
-        select(Category).where(Category.name == name)
+        select(Category).where(Category.user_id == user_id, Category.name == name)
     ).scalar_one_or_none()
     if clash and clash.id != id:
         raise HTTPException(status_code=409, detail=f"Category '{name}' already exists")
@@ -50,22 +71,38 @@ def rename_category(id: uuid.UUID, body: CategoryRename, db: Session = Depends(g
 
 
 @router.delete("/{id}", status_code=204)
-def delete_category(id: uuid.UUID, db: Session = Depends(get_db)):
-    category = db.get(Category, id)
+def delete_category(
+    id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+):
+    category = db.execute(
+        select(Category).where(Category.id == id, Category.user_id == user_id)
+    ).scalar_one_or_none()
     if category is None:
         raise HTTPException(status_code=404, detail="Category not found")
 
     in_use = (
         db.execute(
             select(ProcessedTransaction)
-            .where(ProcessedTransaction.category_id == id)
+            .where(
+                ProcessedTransaction.category_id == id,
+                ProcessedTransaction.user_id == user_id,
+            )
             .limit(1)
         ).scalar_one_or_none()
         or db.execute(
-            select(BudgetPlan).where(BudgetPlan.category_id == id).limit(1)
+            select(BudgetPlan)
+            .where(BudgetPlan.category_id == id, BudgetPlan.user_id == user_id)
+            .limit(1)
         ).scalar_one_or_none()
         or db.execute(
-            select(CategoryMapping).where(CategoryMapping.category_id == id).limit(1)
+            select(CategoryMapping)
+            .where(
+                CategoryMapping.category_id == id,
+                CategoryMapping.user_id == user_id,
+            )
+            .limit(1)
         ).scalar_one_or_none()
     )
     if in_use:

@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 from typing import List, Optional
 
@@ -5,6 +6,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.database import get_db
 from app.models import (
     BudgetPlan,
@@ -22,11 +24,16 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
 @router.get("/summary", response_model=List[SummaryRow])
-def summary(year: int, month: int, db: Session = Depends(get_db)):
+def summary(
+    year: int,
+    month: int,
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+):
     budget_rows = db.execute(
         select(Category.name, BudgetPlan.allocated_amount)
         .join(Category, Category.id == BudgetPlan.category_id)
-        .where(BudgetPlan.year == year)
+        .where(BudgetPlan.year == year, BudgetPlan.user_id == user_id)
     ).all()
     budget_map = {
         row.name: Decimal(str(row.allocated_amount)) / 12 for row in budget_rows
@@ -38,7 +45,11 @@ def summary(year: int, month: int, db: Session = Depends(get_db)):
             func.sum(ProcessedTransaction.effective_amount).label("actual"),
         )
         .join(Category, Category.id == ProcessedTransaction.category_id)
-        .where(ProcessedTransaction.year == year, ProcessedTransaction.month == month)
+        .where(
+            ProcessedTransaction.year == year,
+            ProcessedTransaction.month == month,
+            ProcessedTransaction.user_id == user_id,
+        )
         .group_by(Category.name)
     ).all()
     actual_map = {row.name: Decimal(str(row.actual)) for row in actual_rows}
@@ -70,13 +81,17 @@ def monthly_trend(
     year: int,
     category_id: Optional[str] = None,
     db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
 ):
     query = (
         select(
             ProcessedTransaction.month,
             func.sum(ProcessedTransaction.effective_amount).label("actual_amount"),
         )
-        .where(ProcessedTransaction.year == year)
+        .where(
+            ProcessedTransaction.year == year,
+            ProcessedTransaction.user_id == user_id,
+        )
         .group_by(ProcessedTransaction.month)
         .order_by(ProcessedTransaction.month)
     )
@@ -99,6 +114,7 @@ def split_ledger(
     year: int,
     include_settled: bool = False,
     db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
 ):
     query = (
         select(
@@ -110,7 +126,11 @@ def split_ledger(
             ProcessedTransaction,
             ProcessedTransaction.id == TransactionPersonShare.processed_txn_id,
         )
-        .where(ProcessedTransaction.year == year, ProcessedTransaction.month == month)
+        .where(
+            ProcessedTransaction.year == year,
+            ProcessedTransaction.month == month,
+            ProcessedTransaction.user_id == user_id,
+        )
         .group_by(Person.name)
         .order_by(Person.name)
     )
@@ -131,11 +151,15 @@ def split_ledger(
 
 
 @router.get("/ytd", response_model=List[YTDRow])
-def ytd(year: int, db: Session = Depends(get_db)):
+def ytd(
+    year: int,
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+):
     budget_rows = db.execute(
         select(Category.name, BudgetPlan.allocated_amount)
         .join(Category, Category.id == BudgetPlan.category_id)
-        .where(BudgetPlan.year == year)
+        .where(BudgetPlan.year == year, BudgetPlan.user_id == user_id)
     ).all()
     budget_map = {row.name: Decimal(str(row.allocated_amount)) for row in budget_rows}
 
@@ -145,7 +169,10 @@ def ytd(year: int, db: Session = Depends(get_db)):
             func.sum(ProcessedTransaction.effective_amount).label("actual"),
         )
         .join(Category, Category.id == ProcessedTransaction.category_id)
-        .where(ProcessedTransaction.year == year)
+        .where(
+            ProcessedTransaction.year == year,
+            ProcessedTransaction.user_id == user_id,
+        )
         .group_by(Category.name)
     ).all()
     actual_map = {row.name: Decimal(str(row.actual)) for row in actual_rows}
