@@ -12,4 +12,4 @@ pydantic==2.10.3
 pydantic-settings==2.7.0
 PyJWT==2.12.1
 cryptography==44.0.3
-passlib[bcrypt]==1.7.4
+bcrypt==4.2.1

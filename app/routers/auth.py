@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, status
-from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,8 +13,15 @@ from app.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _TOKEN_TTL_DAYS = 30
+
+
+def _hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def _verify_password(password: str, hashed: str) -> bool:
+    return bcrypt.checkpw(password.encode(), hashed.encode())
 
 
 class AuthRequest(BaseModel):
@@ -46,7 +53,7 @@ def register(body: AuthRequest, db: Session = Depends(get_db)):
 
     user = User(
         email=body.email.lower(),
-        password_hash=_pwd.hash(body.password),
+        password_hash=_hash_password(body.password),
     )
     db.add(user)
     db.commit()
@@ -59,7 +66,7 @@ def login(body: AuthRequest, db: Session = Depends(get_db)):
     user = db.execute(
         select(User).where(User.email == body.email.lower())
     ).scalar_one_or_none()
-    if user is None or not _pwd.verify(body.password, user.password_hash):
+    if user is None or not _verify_password(body.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
