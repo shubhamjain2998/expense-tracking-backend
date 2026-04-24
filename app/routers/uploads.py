@@ -1,12 +1,15 @@
+import hashlib
 import uuid
 from decimal import Decimal
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.database import get_db
-from app.models import RawTransaction
+from app.models import RawTransaction, UploadedFile
 from app.schemas import (
     ParseTextRequest,
     PreviewRow,
@@ -14,6 +17,7 @@ from app.schemas import (
     RawTransactionOut,
     UploadStatementResponse,
 )
+from app.services.normalizer import clean_description
 from app.services.pdf_parser import parse_bank_statement
 from app.services.text_parser import parse_bank_statement_text
 
@@ -24,6 +28,67 @@ _ALLOWED_CONTENT_TYPES = {
     "application/octet-stream",  # some HTTP clients send this for PDFs
     "application/x-pdf",
 }
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _check_duplicate(content_hash: str, user_id: uuid.UUID, db: Session) -> None:
+    """Raise 409 if this hash was already imported and still has active transactions.
+
+    If the prior upload exists but all its raw transactions have been deleted,
+    the UploadedFile record is removed so the same file can be re-imported.
+    """
+    from app.models import RawTransaction
+
+    existing = db.execute(
+        select(UploadedFile).where(
+            UploadedFile.user_id == user_id,
+            UploadedFile.content_hash == content_hash,
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        return
+
+    # Check if any non-deleted raw transactions still reference this upload
+    active = db.execute(
+        select(RawTransaction).where(
+            RawTransaction.upload_id == existing.id,
+            RawTransaction.status != "deleted",
+        )
+    ).scalar_one_or_none()
+
+    if active is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This statement has already been imported. "
+                "Delete the existing transactions first if you want to re-import."
+            ),
+        )
+
+    # All transactions from this upload have been deleted — clean up and allow re-import
+    db.delete(existing)
+    db.flush()
+
+
+def _record_upload(
+    content_hash: str,
+    user_id: uuid.UUID,
+    source_type: str,
+    filename: Optional[str],
+    db: Session,
+) -> UploadedFile:
+    record = UploadedFile(
+        user_id=user_id,
+        content_hash=content_hash,
+        source_type=source_type,
+        filename=filename,
+    )
+    db.add(record)
+    db.flush()  # populate record.id before linking raw transactions
+    return record
 
 
 def _require_pdf(file: UploadFile) -> None:
@@ -55,6 +120,9 @@ async def upload_statement(
     if not pdf_bytes:
         raise HTTPException(status_code=422, detail="Uploaded file is empty.")
 
+    content_hash = _sha256(pdf_bytes)
+    _check_duplicate(content_hash, user_id, db)
+
     try:
         result = parse_bank_statement(pdf_bytes)
     except Exception as exc:
@@ -73,14 +141,17 @@ async def upload_statement(
             ),
         )
 
+    upload = _record_upload(content_hash, user_id, "pdf", file.filename, db)
+
     db_rows: list[RawTransaction] = []
     for row in result.rows:
         txn = RawTransaction(
             user_id=user_id,
             txn_date=row.txn_date,
-            description=row.description,
+            description=clean_description(row.description),
             amount=Decimal(str(row.amount)),
             status="pending",
+            upload_id=upload.id,
         )
         db.add(txn)
         db_rows.append(txn)
@@ -182,6 +253,9 @@ def text_import(
     Parse pasted bank statement text and persist all extracted transactions as
     raw_transactions with status='pending'.
     """
+    content_hash = _sha256(body.text.encode())
+    _check_duplicate(content_hash, user_id, db)
+
     result = parse_bank_statement_text(body.text)
 
     if not result.rows:
@@ -194,14 +268,17 @@ def text_import(
             ),
         )
 
+    upload = _record_upload(content_hash, user_id, "text", None, db)
+
     db_rows: list[RawTransaction] = []
     for row in result.rows:
         txn = RawTransaction(
             user_id=user_id,
             txn_date=row.txn_date,
-            description=row.description,
+            description=clean_description(row.description),
             amount=Decimal(str(row.amount)),
             status="pending",
+            upload_id=upload.id,
         )
         db.add(txn)
         db_rows.append(txn)
