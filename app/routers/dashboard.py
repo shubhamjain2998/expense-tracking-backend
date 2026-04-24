@@ -14,6 +14,7 @@ from app.models import (
     Person,
     ProcessedTransaction,
     TransactionPersonShare,
+    transaction_tags,
 )
 from app.schemas import MonthlyTrendRow, SplitLedgerRow, SummaryRow, YTDRow
 
@@ -27,6 +28,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 def summary(
     year: int,
     month: int,
+    tag_id: Optional[uuid.UUID] = None,
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
@@ -39,7 +41,7 @@ def summary(
         row.name: Decimal(str(row.allocated_amount)) / 12 for row in budget_rows
     }
 
-    actual_rows = db.execute(
+    actual_query = (
         select(
             Category.name,
             func.sum(ProcessedTransaction.effective_amount).label("actual"),
@@ -51,7 +53,16 @@ def summary(
             ProcessedTransaction.user_id == user_id,
         )
         .group_by(Category.name)
-    ).all()
+    )
+    if tag_id is not None:
+        actual_query = actual_query.where(
+            ProcessedTransaction.id.in_(
+                select(transaction_tags.c.processed_txn_id).where(
+                    transaction_tags.c.tag_id == tag_id
+                )
+            )
+        )
+    actual_rows = db.execute(actual_query).all()
     actual_map = {row.name: Decimal(str(row.actual)) for row in actual_rows}
 
     all_categories = set(budget_map) | set(actual_map)
@@ -80,6 +91,7 @@ def summary(
 def monthly_trend(
     year: int,
     category_id: Optional[str] = None,
+    tag_id: Optional[uuid.UUID] = None,
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
@@ -97,6 +109,14 @@ def monthly_trend(
     )
     if category_id is not None:
         query = query.where(ProcessedTransaction.category_id == category_id)
+    if tag_id is not None:
+        query = query.where(
+            ProcessedTransaction.id.in_(
+                select(transaction_tags.c.processed_txn_id).where(
+                    transaction_tags.c.tag_id == tag_id
+                )
+            )
+        )
 
     rows = db.execute(query).all()
     return [

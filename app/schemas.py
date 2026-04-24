@@ -232,6 +232,11 @@ class AutoCategoriseResponse(BaseModel):
     pending_manual: int
 
 
+class BulkTagRequest(BaseModel):
+    transaction_ids: List[uuid.UUID]
+    tag_ids: List[uuid.UUID]
+
+
 # ─── Category mappings ────────────────────────────────────────────────────────
 
 

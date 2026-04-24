@@ -6,6 +6,8 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from rapidfuzz import fuzz
 from sqlalchemy import select
+
+from app.services.normalizer import normalize_description
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
@@ -18,9 +20,11 @@ from app.models import (
     RawTransaction,
     Tag,
     TransactionPersonShare,
+    transaction_tags,
 )
 from app.schemas import (
     AutoCategoriseResponse,
+    BulkTagRequest,
     CreateRawTransactionRequest,
     PatchProcessedTransactionRequest,
     PatchShareSettledRequest,
@@ -98,6 +102,7 @@ def get_processed_transactions(
     year: int,
     month: Optional[int] = None,
     category_id: Optional[uuid.UUID] = None,
+    tag_id: Optional[uuid.UUID] = None,
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
@@ -109,6 +114,14 @@ def get_processed_transactions(
         query = query.where(ProcessedTransaction.month == month)
     if category_id is not None:
         query = query.where(ProcessedTransaction.category_id == category_id)
+    if tag_id is not None:
+        query = query.where(
+            ProcessedTransaction.id.in_(
+                select(transaction_tags.c.processed_txn_id).where(
+                    transaction_tags.c.tag_id == tag_id
+                )
+            )
+        )
     query = query.order_by(ProcessedTransaction.txn_date)
     txns = db.execute(query).scalars().all()
     return [ProcessedTransactionOut.from_orm(t) for t in txns]
@@ -176,6 +189,7 @@ def delete_raw_transaction(
     if txn is None:
         raise HTTPException(status_code=404, detail="Raw transaction not found")
     txn.status = "deleted"
+    txn.deleted_at = datetime.now(timezone.utc)
     db.commit()
 
 
@@ -228,10 +242,14 @@ def auto_categorise(
         if not mappings:
             break
 
+        normalised_desc = normalize_description(txn.description)
         best_score = 0
         best_mapping = None
         for mapping in mappings:
-            score = fuzz.token_sort_ratio(txn.description, mapping.description_pattern)
+            score = fuzz.token_sort_ratio(
+                normalised_desc,
+                normalize_description(mapping.description_pattern),
+            )
             if score > best_score:
                 best_score = score
                 best_mapping = mapping
@@ -508,3 +526,33 @@ def patch_processed_transaction(
     db.commit()
     db.refresh(processed)
     return ProcessedTransactionOut.from_orm(processed)
+
+
+@router.post("/processed/bulk-tag", status_code=204)
+def bulk_tag_transactions(
+    body: BulkTagRequest,
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+):
+    """Add tags to multiple processed transactions at once.
+
+    Tags are *added* (not replaced) — existing tags on each transaction are preserved.
+    Transactions or tags not belonging to this user are silently skipped.
+    """
+    tags = _resolve_tags(body.tag_ids, user_id, db)
+
+    for txn_id in body.transaction_ids:
+        processed = db.execute(
+            select(ProcessedTransaction).where(
+                ProcessedTransaction.id == txn_id,
+                ProcessedTransaction.user_id == user_id,
+            )
+        ).scalar_one_or_none()
+        if processed is None:
+            continue
+        existing_ids = {t.id for t in processed.tags}
+        for tag in tags:
+            if tag.id not in existing_ids:
+                processed.tags.append(tag)
+
+    db.commit()
