@@ -1,11 +1,13 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import List, Optional
+
 from sqlalchemy import (
     UUID,
     Boolean,
     Date,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -15,13 +17,30 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.database import Base
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+# ─── Timestamp mixin ──────────────────────────────────────────────────────────
+
+
+class TimestampMixin:
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, onupdate=_now
+    )
 
 
 # ─── User ─────────────────────────────────────────────────────────────────────
 
 
-class User(Base):
+class User(TimestampMixin, Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -34,7 +53,7 @@ class User(Base):
 # ─── Category ─────────────────────────────────────────────────────────────────
 
 
-class Category(Base):
+class Category(TimestampMixin, Base):
     """A small, stable, user-defined category used strictly for budgeting.
 
     Renaming updates the name in-place; all FK references stay valid automatically.
@@ -81,7 +100,7 @@ transaction_tags = Table(
 )
 
 
-class Tag(Base):
+class Tag(TimestampMixin, Base):
     """Flexible labels for additional context.
 
     Independent of categories and budgeting.
@@ -104,7 +123,7 @@ class Tag(Base):
 # ─── Person shares ────────────────────────────────────────────────────────────
 
 
-class TransactionPersonShare(Base):
+class TransactionPersonShare(TimestampMixin, Base):
     """Per-person share of a split transaction.
 
     share_type = "percentage": share_value is 0-100 (percent of total)
@@ -141,7 +160,7 @@ class TransactionPersonShare(Base):
 # ─── Budget ───────────────────────────────────────────────────────────────────
 
 
-class BudgetPlan(Base):
+class BudgetPlan(TimestampMixin, Base):
     __tablename__ = "budget_plans"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -160,8 +179,12 @@ class BudgetPlan(Base):
 # ─── Raw transactions ─────────────────────────────────────────────────────────
 
 
-class RawTransaction(Base):
+class RawTransaction(TimestampMixin, Base):
     __tablename__ = "raw_transactions"
+    __table_args__ = (
+        Index("ix_raw_txn_user_status", "user_id", "status"),
+        Index("ix_raw_txn_description", "description"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -173,21 +196,33 @@ class RawTransaction(Base):
     status: Mapped[str] = mapped_column(
         String, default="pending"
     )  # pending | deleted | processed
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    upload_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("uploaded_files.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     processed: Mapped[Optional["ProcessedTransaction"]] = relationship(
         back_populates="raw_transaction"
+    )
+    uploaded_file: Mapped[Optional["UploadedFile"]] = relationship(
+        back_populates="raw_transactions"
     )
 
 
 # ─── Category mappings ────────────────────────────────────────────────────────
 
 
-class CategoryMapping(Base):
+class CategoryMapping(TimestampMixin, Base):
     __tablename__ = "category_mappings"
     __table_args__ = (
         UniqueConstraint(
             "user_id", "description_pattern", name="uq_category_mappings_user_pattern"
         ),
+        Index("ix_cat_mappings_pattern", "description_pattern"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -210,7 +245,7 @@ class CategoryMapping(Base):
 # ─── Persons ──────────────────────────────────────────────────────────────────
 
 
-class Person(Base):
+class Person(TimestampMixin, Base):
     __tablename__ = "persons"
     __table_args__ = (UniqueConstraint("user_id", "name", name="uq_persons_user_name"),)
 
@@ -228,8 +263,12 @@ class Person(Base):
 # ─── Processed transactions ───────────────────────────────────────────────────
 
 
-class ProcessedTransaction(Base):
+class ProcessedTransaction(TimestampMixin, Base):
     __tablename__ = "processed_transactions"
+    __table_args__ = (
+        Index("ix_processed_txn_user_year_month", "user_id", "year", "month"),
+        Index("ix_processed_txn_cat_date", "category_id", "txn_date"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -265,4 +304,36 @@ class ProcessedTransaction(Base):
     )
     tags: Mapped[List["Tag"]] = relationship(
         secondary=transaction_tags, back_populates="processed_transactions"
+    )
+
+
+# ─── Uploaded files (duplicate detection) ─────────────────────────────────────
+
+
+class UploadedFile(Base):
+    """Records the SHA-256 hash of every successfully imported file or text blob.
+
+    Before inserting raw transactions, the upload endpoints check whether the
+    (user_id, content_hash) pair already exists here.  If it does the request
+    is rejected with 409 Conflict to prevent duplicate imports.
+    """
+
+    __tablename__ = "uploaded_files"
+    __table_args__ = (
+        UniqueConstraint("user_id", "content_hash", name="uq_uploaded_files_user_hash"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String, nullable=False)
+    source_type: Mapped[str] = mapped_column(String, nullable=False)  # "pdf" | "text"
+    filename: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+
+    raw_transactions: Mapped[List["RawTransaction"]] = relationship(
+        back_populates="uploaded_file"
     )
