@@ -2,8 +2,8 @@ import uuid
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
@@ -17,6 +17,12 @@ from app.models import (
     transaction_tags,
 )
 from app.schemas import MonthlyTrendRow, SplitLedgerRow, SummaryRow, YTDRow
+from app.services.period import (
+    PeriodMode,
+    calendar_to_period_month,
+    period_year_range,
+    resolve_period_month,
+)
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -29,9 +35,12 @@ def summary(
     year: int,
     month: int,
     tag_id: Optional[uuid.UUID] = None,
+    period_mode: PeriodMode = Query("calendar"),
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
+    cal_year, cal_month = resolve_period_month(year, month, period_mode)
+
     budget_rows = db.execute(
         select(Category.name, BudgetPlan.allocated_amount)
         .join(Category, Category.id == BudgetPlan.category_id)
@@ -48,8 +57,8 @@ def summary(
         )
         .join(Category, Category.id == ProcessedTransaction.category_id)
         .where(
-            ProcessedTransaction.year == year,
-            ProcessedTransaction.month == month,
+            ProcessedTransaction.year == cal_year,
+            ProcessedTransaction.month == cal_month,
             ProcessedTransaction.user_id == user_id,
         )
         .group_by(Category.name)
@@ -92,20 +101,42 @@ def monthly_trend(
     year: int,
     category_id: Optional[str] = None,
     tag_id: Optional[uuid.UUID] = None,
+    period_mode: PeriodMode = Query("calendar"),
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
+    start, end = period_year_range(year, period_mode)
+
     query = (
         select(
+            ProcessedTransaction.year,
             ProcessedTransaction.month,
-            func.sum(ProcessedTransaction.effective_amount).label("actual_amount"),
+            func.sum(
+                case(
+                    (
+                        ProcessedTransaction.effective_amount > 0,
+                        ProcessedTransaction.effective_amount,
+                    ),
+                    else_=0,
+                )
+            ).label("actual_amount"),
+            func.sum(
+                case(
+                    (
+                        ProcessedTransaction.effective_amount < 0,
+                        -ProcessedTransaction.effective_amount,
+                    ),
+                    else_=0,
+                )
+            ).label("income_amount"),
+            func.count(ProcessedTransaction.id).label("txn_count"),
         )
         .where(
-            ProcessedTransaction.year == year,
+            ProcessedTransaction.txn_date >= start,
+            ProcessedTransaction.txn_date <= end,
             ProcessedTransaction.user_id == user_id,
         )
-        .group_by(ProcessedTransaction.month)
-        .order_by(ProcessedTransaction.month)
+        .group_by(ProcessedTransaction.year, ProcessedTransaction.month)
     )
     if category_id is not None:
         query = query.where(ProcessedTransaction.category_id == category_id)
@@ -119,10 +150,18 @@ def monthly_trend(
         )
 
     rows = db.execute(query).all()
-    return [
-        MonthlyTrendRow(month=row.month, actual_amount=Decimal(str(row.actual_amount)))
+    # Bucket into 1-12 period months for stable client-side ordering.
+    result = [
+        MonthlyTrendRow(
+            month=calendar_to_period_month(row.year, row.month, period_mode),
+            actual_amount=Decimal(str(row.actual_amount or 0)),
+            income_amount=Decimal(str(row.income_amount or 0)),
+            txn_count=row.txn_count,
+        )
         for row in rows
     ]
+    result.sort(key=lambda r: r.month)
+    return result
 
 
 # ─── /split-ledger ────────────────────────────────────────────────────────────
@@ -133,9 +172,12 @@ def split_ledger(
     month: int,
     year: int,
     include_settled: bool = False,
+    period_mode: PeriodMode = Query("calendar"),
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
+    cal_year, cal_month = resolve_period_month(year, month, period_mode)
+
     query = (
         select(
             Person.name.label("person_name"),
@@ -147,8 +189,8 @@ def split_ledger(
             ProcessedTransaction.id == TransactionPersonShare.processed_txn_id,
         )
         .where(
-            ProcessedTransaction.year == year,
-            ProcessedTransaction.month == month,
+            ProcessedTransaction.year == cal_year,
+            ProcessedTransaction.month == cal_month,
             ProcessedTransaction.user_id == user_id,
         )
         .group_by(Person.name)
@@ -173,9 +215,12 @@ def split_ledger(
 @router.get("/ytd", response_model=List[YTDRow])
 def ytd(
     year: int,
+    period_mode: PeriodMode = Query("calendar"),
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
+    start, end = period_year_range(year, period_mode)
+
     budget_rows = db.execute(
         select(Category.name, BudgetPlan.allocated_amount)
         .join(Category, Category.id == BudgetPlan.category_id)
@@ -190,7 +235,8 @@ def ytd(
         )
         .join(Category, Category.id == ProcessedTransaction.category_id)
         .where(
-            ProcessedTransaction.year == year,
+            ProcessedTransaction.txn_date >= start,
+            ProcessedTransaction.txn_date <= end,
             ProcessedTransaction.user_id == user_id,
         )
         .group_by(Category.name)

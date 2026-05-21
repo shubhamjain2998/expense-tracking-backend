@@ -290,6 +290,8 @@ class SummaryRow(BaseModel):
 class MonthlyTrendRow(BaseModel):
     month: int
     actual_amount: Decimal
+    income_amount: Decimal = Decimal("0")
+    txn_count: int = 0
 
 
 class SplitLedgerRow(BaseModel):

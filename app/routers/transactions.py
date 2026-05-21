@@ -3,11 +3,16 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from rapidfuzz import fuzz
 from sqlalchemy import select
 
 from app.services.normalizer import normalize_description
+from app.services.period import (
+    PeriodMode,
+    period_year_range,
+    resolve_period_month,
+)
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
@@ -99,19 +104,32 @@ def _resolve_tags(
 
 @router.get("/processed", response_model=List[ProcessedTransactionOut])
 def get_processed_transactions(
-    year: int,
+    year: Optional[int] = None,
     month: Optional[int] = None,
     category_id: Optional[uuid.UUID] = None,
     tag_id: Optional[uuid.UUID] = None,
+    period_mode: PeriodMode = Query("calendar"),
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
-    query = select(ProcessedTransaction).where(
-        ProcessedTransaction.year == year,
-        ProcessedTransaction.user_id == user_id,
-    )
-    if month is not None:
+    query = select(ProcessedTransaction).where(ProcessedTransaction.user_id == user_id)
+
+    if year is not None and month is not None:
+        cal_year, cal_month = resolve_period_month(year, month, period_mode)
+        query = query.where(
+            ProcessedTransaction.year == cal_year,
+            ProcessedTransaction.month == cal_month,
+        )
+    elif year is not None:
+        start, end = period_year_range(year, period_mode)
+        query = query.where(
+            ProcessedTransaction.txn_date >= start,
+            ProcessedTransaction.txn_date <= end,
+        )
+    elif month is not None:
+        # Month without year is ambiguous in fy mode; treat as calendar month.
         query = query.where(ProcessedTransaction.month == month)
+
     if category_id is not None:
         query = query.where(ProcessedTransaction.category_id == category_id)
     if tag_id is not None:
@@ -131,6 +149,7 @@ def get_processed_transactions(
 def get_raw_transactions(
     month: Optional[int] = None,
     year: Optional[int] = None,
+    period_mode: PeriodMode = Query("calendar"),
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
@@ -138,18 +157,23 @@ def get_raw_transactions(
         RawTransaction.status == "pending",
         RawTransaction.user_id == user_id,
     )
-    if year is not None:
-        query = query.where(
-            RawTransaction.txn_date.between(f"{year}-01-01", f"{year}-12-31 23:59:59")
-        )
-    if month is not None and year is not None:
+    if year is not None and month is not None:
         import calendar
 
-        last_day = calendar.monthrange(year, month)[1]
+        cal_year, cal_month = resolve_period_month(year, month, period_mode)
+        last_day = calendar.monthrange(cal_year, cal_month)[1]
         query = query.where(
             RawTransaction.txn_date.between(
-                f"{year}-{month:02d}-01",
-                f"{year}-{month:02d}-{last_day} 23:59:59",
+                f"{cal_year}-{cal_month:02d}-01",
+                f"{cal_year}-{cal_month:02d}-{last_day} 23:59:59",
+            )
+        )
+    elif year is not None:
+        start, end = period_year_range(year, period_mode)
+        query = query.where(
+            RawTransaction.txn_date.between(
+                f"{start.isoformat()} 00:00:00",
+                f"{end.isoformat()} 23:59:59",
             )
         )
     rows = db.execute(query).scalars().all()
