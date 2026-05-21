@@ -305,3 +305,71 @@ class YTDRow(BaseModel):
     actual_ytd: Decimal
     variance: Decimal
     pct_used: Optional[float]
+
+
+# ─── Backup / Import / Export ─────────────────────────────────────────────────
+
+
+class BackupNamedEntity(BaseModel):
+    name: str
+
+
+class BackupBudgetPlan(BaseModel):
+    year: int
+    category: str
+    allocated_amount: Decimal
+
+
+class BackupCategoryMapping(BaseModel):
+    description_pattern: str
+    category: str
+
+
+class BackupShare(BaseModel):
+    person: str
+    share_type: Literal["percentage", "amount"]
+    share_value: Decimal
+    settled: bool = False
+
+
+class BackupTransaction(BaseModel):
+    txn_date: date
+    description: str
+    amount: Decimal
+    category: str
+    notes: Optional[str] = None
+    tags: List[str] = []
+    shares: List[BackupShare] = []
+
+
+class BackupExport(BaseModel):
+    version: str
+    exported_at: datetime
+    categories: List[BackupNamedEntity]
+    tags: List[BackupNamedEntity]
+    persons: List[BackupNamedEntity]
+    budget_plans: List[BackupBudgetPlan]
+    category_mappings: List[BackupCategoryMapping]
+    transactions: List[BackupTransaction]
+
+
+class BackupImport(BaseModel):
+    version: str = "1"
+    categories: List[BackupNamedEntity] = []
+    tags: List[BackupNamedEntity] = []
+    persons: List[BackupNamedEntity] = []
+    budget_plans: List[BackupBudgetPlan] = []
+    # If omitted, mappings are derived from (description, category) of imported txns.
+    category_mappings: Optional[List[BackupCategoryMapping]] = None
+    transactions: List[BackupTransaction] = []
+
+
+class BackupImportResponse(BaseModel):
+    categories_created: int
+    tags_created: int
+    persons_created: int
+    budget_plans_created: int
+    category_mappings_created: int
+    transactions_imported: int
+    transactions_skipped_duplicates: int
+    skipped_rows: List[str] = []
