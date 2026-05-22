@@ -1,5 +1,8 @@
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from app.config import settings
 from app.routers import (
     admin,
@@ -14,6 +17,8 @@ from app.routers import (
     dashboard,
     tags,
 )
+
+logger = logging.getLogger("app")
 
 app = FastAPI(title="Expense Tracker API")
 
@@ -30,6 +35,17 @@ app.add_middleware(
         "X-Requested-With",
     ],
 )
+
+
+# Catch-all exception handler. Without this, Starlette's ServerErrorMiddleware
+# sits OUTSIDE the CORS middleware and returns a 500 with no CORS headers, so
+# the browser surfaces "blocked by CORS policy" instead of the real error.
+# Routing the response through a FastAPI handler ensures CORS headers attach.
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+
 
 app.include_router(auth.router)
 app.include_router(admin.router)

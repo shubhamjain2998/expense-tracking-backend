@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -27,9 +27,14 @@ def _verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
 
-class AuthRequest(BaseModel):
-    email: str
-    password: str
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
 
 
 class TokenResponse(BaseModel):
@@ -64,7 +69,7 @@ def _set_auth_cookie(response: Response, token: str) -> None:
 
 
 @router.post("/register", response_model=TokenResponse, status_code=201)
-def register(body: AuthRequest, response: Response, db: Session = Depends(get_db)):
+def register(body: RegisterRequest, response: Response, db: Session = Depends(get_db)):
     existing = db.execute(
         select(User).where(User.email == body.email.lower())
     ).scalar_one_or_none()
@@ -85,7 +90,7 @@ def register(body: AuthRequest, response: Response, db: Session = Depends(get_db
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(body: AuthRequest, response: Response, db: Session = Depends(get_db)):
+def login(body: LoginRequest, response: Response, db: Session = Depends(get_db)):
     user = db.execute(
         select(User).where(User.email == body.email.lower())
     ).scalar_one_or_none()
