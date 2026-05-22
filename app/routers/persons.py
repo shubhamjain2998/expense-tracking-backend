@@ -27,14 +27,15 @@ def create_person(
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
+    name = body.name.strip().casefold()
     existing = db.execute(
-        select(Person).where(Person.user_id == user_id, Person.name == body.name)
+        select(Person).where(Person.user_id == user_id, Person.name == name)
     ).scalar_one_or_none()
     if existing:
         raise HTTPException(
             status_code=409, detail="Person with this name already exists"
         )
-    person = Person(user_id=user_id, name=body.name)
+    person = Person(user_id=user_id, name=name)
     db.add(person)
     db.commit()
     db.refresh(person)

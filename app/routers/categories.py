@@ -33,7 +33,7 @@ def create_category(
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
-    name = body.name.strip().lower()
+    name = body.name.strip().casefold()
     existing = db.execute(
         select(Category).where(Category.user_id == user_id, Category.name == name)
     ).scalar_one_or_none()
@@ -58,7 +58,7 @@ def rename_category(
     ).scalar_one_or_none()
     if category is None:
         raise HTTPException(status_code=404, detail="Category not found")
-    name = body.name.strip().lower()
+    name = body.name.strip().casefold()
     clash = db.execute(
         select(Category).where(Category.user_id == user_id, Category.name == name)
     ).scalar_one_or_none()

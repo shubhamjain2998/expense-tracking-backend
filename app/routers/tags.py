@@ -31,7 +31,7 @@ def create_tag(
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
-    name = body.name.strip().lower()
+    name = body.name.strip().casefold()
     existing = db.execute(
         select(Tag).where(Tag.user_id == user_id, Tag.name == name)
     ).scalar_one_or_none()

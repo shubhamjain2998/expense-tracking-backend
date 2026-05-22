@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ─── Categories ────────────────────────────────────────────────────────────
@@ -17,11 +17,11 @@ class CategoryOut(BaseModel):
 
 
 class CategoryCreate(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=64)
 
 
 class CategoryRename(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=64)
 
 
 # ─── Tags ────────────────────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ class TagOut(BaseModel):
 
 
 class TagCreate(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=64)
 
 
 # ─── Budget ────────────────────────────────────────────────────────────────────
@@ -277,7 +277,7 @@ class PersonOut(BaseModel):
 
 
 class PersonCreate(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=64)
 
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────────
