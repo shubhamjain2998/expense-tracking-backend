@@ -41,6 +41,24 @@ from app.schemas import (
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
+_TRANSFER_PATTERNS = (
+    "CREDIT CARD PAYMENT",
+    "PAYMENT THANK",
+    "NEFT",
+    "IMPS TFR",
+    "RTGS",
+)
+
+
+def classify_txn_type(description: str, amount: Decimal) -> str:
+    """Classify a transaction into expense/income/refund/transfer based on amount and description."""
+    if amount > 0:
+        return "expense"
+    desc_upper = description.upper()
+    if any(p in desc_upper for p in _TRANSFER_PATTERNS):
+        return "transfer"
+    return "refund"
+
 
 def _compute_effective_amount(total: Decimal, shares: List[PersonShareIn]) -> Decimal:
     """User's net cost = total minus what other people owe."""
@@ -99,7 +117,7 @@ def _resolve_tags(
     return tags
 
 
-# ─── Raw transactions ─────────────────────────────────────────────────────────
+# ─── Raw transactions ─────────────────────────────────────────────────────────────────
 
 
 @router.get("/processed", response_model=List[ProcessedTransactionOut])
@@ -150,16 +168,23 @@ def get_raw_transactions(
     month: Optional[int] = None,
     year: Optional[int] = None,
     period_mode: PeriodMode = Query("calendar"),
+    include_deleted: bool = Query(False),
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
-    query = select(RawTransaction).where(
-        RawTransaction.status == "pending",
-        RawTransaction.user_id == user_id,
-    )
-    if year is not None and month is not None:
-        import calendar
+    import calendar
 
+    if include_deleted:
+        query = select(RawTransaction).where(
+            RawTransaction.user_id == user_id,
+            RawTransaction.status.in_(["pending", "deleted"]),
+        )
+    else:
+        query = select(RawTransaction).where(
+            RawTransaction.status == "pending",
+            RawTransaction.user_id == user_id,
+        )
+    if year is not None and month is not None:
         cal_year, cal_month = resolve_period_month(year, month, period_mode)
         last_day = calendar.monthrange(cal_year, cal_month)[1]
         query = query.where(
@@ -236,7 +261,7 @@ def restore_raw_transaction(
     return txn
 
 
-# ─── Auto-categorise ─────────────────────────────────────────────────────────
+# ─── Auto-categorise ─────────────────────────────────────────────────────────────────
 
 
 @router.post("/auto-categorise", response_model=AutoCategoriseResponse)
@@ -294,6 +319,7 @@ def auto_categorise(
                 effective_amount=txn.amount,
                 month=txn.txn_date.month,
                 year=txn.txn_date.year,
+                txn_type=classify_txn_type(txn.description, Decimal(str(txn.amount))),
             )
             db.add(processed)
             txn.status = "processed"
@@ -320,7 +346,7 @@ def auto_categorise(
     )
 
 
-# ─── Manual processing ────────────────────────────────────────────────────────
+# ─── Manual processing ────────────────────────────────────────────────────────────────────
 
 
 @router.get("/pending-manual", response_model=List[RawTransactionOut])
@@ -409,6 +435,7 @@ def process_transaction(
         month=txn_date.month,
         year=txn_date.year,
         notes=body.notes,
+        txn_type=classify_txn_type(txn.description, Decimal(str(txn.amount))),
     )
     db.add(processed)
     db.flush()
@@ -540,6 +567,9 @@ def patch_processed_transaction(
 
     if body.tag_ids is not None:
         processed.tags = _resolve_tags(body.tag_ids, user_id, db)
+
+    if body.txn_type is not None:
+        processed.txn_type = body.txn_type
 
     if body.save_mapping and processed.mapping_id is not None:
         mapping = db.get(CategoryMapping, processed.mapping_id)

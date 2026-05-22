@@ -25,7 +25,7 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# ─── Timestamp mixin ──────────────────────────────────────────────────────────
+# ─── Timestamp mixin ──────────────────────────────────────────────
 
 
 class TimestampMixin:
@@ -37,7 +37,7 @@ class TimestampMixin:
     )
 
 
-# ─── User ─────────────────────────────────────────────────────────────────────
+# ─── User ─────────────────────────────────────────────────────────────────────────────
 
 
 class User(TimestampMixin, Base):
@@ -50,7 +50,7 @@ class User(TimestampMixin, Base):
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
 
 
-# ─── Category ─────────────────────────────────────────────────────────────────
+# ─── Category ─────────────────────────────────────────────────────────────────────
 
 
 class Category(TimestampMixin, Base):
@@ -79,7 +79,7 @@ class Category(TimestampMixin, Base):
     )
 
 
-# ─── Tags ─────────────────────────────────────────────────────────────────────
+# ─── Tags ─────────────────────────────────────────────────────────────────────────────
 
 
 transaction_tags = Table(
@@ -120,7 +120,7 @@ class Tag(TimestampMixin, Base):
     )
 
 
-# ─── Person shares ────────────────────────────────────────────────────────────
+# ─── Person shares ────────────────────────────────────────────────────────────────
 
 
 class TransactionPersonShare(TimestampMixin, Base):
@@ -157,7 +157,7 @@ class TransactionPersonShare(TimestampMixin, Base):
     person: Mapped["Person"] = relationship(back_populates="shares")
 
 
-# ─── Budget ───────────────────────────────────────────────────────────────────
+# ─── Budget ────────────────────────────────────────────────────────────────────────
 
 
 class BudgetPlan(TimestampMixin, Base):
@@ -176,7 +176,7 @@ class BudgetPlan(TimestampMixin, Base):
     category: Mapped["Category"] = relationship(back_populates="budget_plans")
 
 
-# ─── Raw transactions ─────────────────────────────────────────────────────────
+# ─── Raw transactions ─────────────────────────────────────────────────────────────────
 
 
 class RawTransaction(TimestampMixin, Base):
@@ -213,7 +213,7 @@ class RawTransaction(TimestampMixin, Base):
     )
 
 
-# ─── Category mappings ────────────────────────────────────────────────────────
+# ─── Category mappings ────────────────────────────────────────────────────────────────
 
 
 class CategoryMapping(TimestampMixin, Base):
@@ -242,7 +242,7 @@ class CategoryMapping(TimestampMixin, Base):
     )
 
 
-# ─── Persons ──────────────────────────────────────────────────────────────────
+# ─── Persons ──────────────────────────────────────────────────────────────────────────
 
 
 class Person(TimestampMixin, Base):
@@ -260,7 +260,7 @@ class Person(TimestampMixin, Base):
     )
 
 
-# ─── Processed transactions ───────────────────────────────────────────────────
+# ─── Processed transactions ───────────────────────────────────────────────────────────────
 
 
 class ProcessedTransaction(TimestampMixin, Base):
@@ -292,6 +292,9 @@ class ProcessedTransaction(TimestampMixin, Base):
     month: Mapped[int] = mapped_column(Integer, nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    txn_type: Mapped[str] = mapped_column(
+        String, nullable=False, default="expense"
+    )  # expense | income | refund | transfer
 
     category: Mapped["Category"] = relationship(back_populates="processed_transactions")
     raw_transaction: Mapped["RawTransaction"] = relationship(back_populates="processed")
@@ -307,7 +310,7 @@ class ProcessedTransaction(TimestampMixin, Base):
     )
 
 
-# ─── Uploaded files (duplicate detection) ─────────────────────────────────────
+# ─── Uploaded files (duplicate detection) ─────────────────────────────────────────────
 
 
 class UploadedFile(Base):

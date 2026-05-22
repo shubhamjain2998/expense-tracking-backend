@@ -6,7 +6,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
-# ─── Categories ───────────────────────────────────────────────────────────────
+# ─── Categories ──────────────────────────────────────────────────────────────────────────
 
 
 class CategoryOut(BaseModel):
@@ -24,7 +24,7 @@ class CategoryRename(BaseModel):
     name: str
 
 
-# ─── Tags ─────────────────────────────────────────────────────────────────────
+# ─── Tags ─────────────────────────────────────────────────────────────────────────────
 
 
 class TagOut(BaseModel):
@@ -38,7 +38,7 @@ class TagCreate(BaseModel):
     name: str
 
 
-# ─── Budget ───────────────────────────────────────────────────────────────────
+# ─── Budget ────────────────────────────────────────────────────────────────────────
 
 
 class BudgetEntryCreate(BaseModel):
@@ -76,7 +76,7 @@ class BudgetPlanOut(BaseModel):
         )
 
 
-# ─── Uploads ──────────────────────────────────────────────────────────────────
+# ─── Uploads ──────────────────────────────────────────────────────────────────────────
 
 
 class RawTransactionOut(BaseModel):
@@ -87,6 +87,7 @@ class RawTransactionOut(BaseModel):
     description: str
     amount: Decimal
     status: str
+    deleted_at: Optional[datetime] = None
 
 
 class UploadStatementResponse(BaseModel):
@@ -128,7 +129,7 @@ class CreateRawTransactionRequest(BaseModel):
         return v
 
 
-# ─── Transactions ─────────────────────────────────────────────────────────────
+# ─── Transactions ────────────────────────────────────────────────────────────────────────
 
 
 class PersonShareIn(BaseModel):
@@ -185,6 +186,7 @@ class ProcessedTransactionOut(BaseModel):
     month: int
     year: int
     notes: Optional[str]
+    txn_type: str = "expense"  # expense | income | refund | transfer
     shares: List[PersonShareOut] = []
     tags: List[TagOut] = []
 
@@ -203,6 +205,7 @@ class ProcessedTransactionOut(BaseModel):
             month=txn.month,
             year=txn.year,
             notes=txn.notes,
+            txn_type=txn.txn_type or "expense",
             shares=[PersonShareOut.from_orm_share(s) for s in txn.shares],
             tags=[TagOut(id=t.id, name=t.name) for t in txn.tags],
         )
@@ -225,6 +228,7 @@ class PatchProcessedTransactionRequest(BaseModel):
     shares: Optional[List[PersonShareIn]] = None
     tag_ids: Optional[List[uuid.UUID]] = None
     save_mapping: Optional[bool] = None
+    txn_type: Optional[Literal["expense", "income", "refund", "transfer"]] = None
 
 
 class AutoCategoriseResponse(BaseModel):
@@ -237,7 +241,7 @@ class BulkTagRequest(BaseModel):
     tag_ids: List[uuid.UUID]
 
 
-# ─── Category mappings ────────────────────────────────────────────────────────
+# ─── Category mappings ────────────────────────────────────────────────────────────────
 
 
 class CategoryMappingOut(BaseModel):
@@ -262,7 +266,7 @@ class CategoryMappingOut(BaseModel):
         )
 
 
-# ─── Persons ──────────────────────────────────────────────────────────────────
+# ─── Persons ──────────────────────────────────────────────────────────────────────────
 
 
 class PersonOut(BaseModel):
@@ -276,7 +280,7 @@ class PersonCreate(BaseModel):
     name: str
 
 
-# ─── Dashboard ────────────────────────────────────────────────────────────────
+# ─── Dashboard ─────────────────────────────────────────────────────────────────────────
 
 
 class SummaryRow(BaseModel):
@@ -307,7 +311,7 @@ class YTDRow(BaseModel):
     pct_used: Optional[float]
 
 
-# ─── Backup / Import / Export ─────────────────────────────────────────────────
+# ─── Backup / Import / Export ───────────────────────────────────────────────────────────────
 
 
 class BackupNamedEntity(BaseModel):
