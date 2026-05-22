@@ -189,6 +189,9 @@ def clean_description(text: str) -> str:
     # Remove parenthetical blocks: "(Ref# 00303017211556)", "(PGSI)"
     text = _PARENS_RE.sub(" ", text)
 
+    # Strip incomplete trailing parens — e.g. "(Ref#" when closing ")" fell on the next line
+    text = re.sub(r"\s*\([^)]*$", "", text)
+
     # Remove bare URLs: "www.linkedin.com"
     text = _URL_RE.sub(" ", text)
 
