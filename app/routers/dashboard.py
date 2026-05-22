@@ -27,7 +27,7 @@ from app.services.period import (
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
-# ─── /summary ─────────────────────────────────────────────────────────────────
+# ─── /summary ─────────────────────────────────────────────────────────────────────────────
 
 
 @router.get("/summary", response_model=List[SummaryRow])
@@ -60,6 +60,7 @@ def summary(
             ProcessedTransaction.year == cal_year,
             ProcessedTransaction.month == cal_month,
             ProcessedTransaction.user_id == user_id,
+            ProcessedTransaction.txn_type.in_(["expense", "refund"]),
         )
         .group_by(Category.name)
     )
@@ -93,7 +94,7 @@ def summary(
     return result
 
 
-# ─── /monthly-trend ───────────────────────────────────────────────────────────
+# ─── /monthly-trend ──────────────────────────────────────────────────────────────────────────
 
 
 @router.get("/monthly-trend", response_model=List[MonthlyTrendRow])
@@ -114,7 +115,7 @@ def monthly_trend(
             func.sum(
                 case(
                     (
-                        ProcessedTransaction.effective_amount > 0,
+                        ProcessedTransaction.txn_type.in_(["expense", "refund"]),
                         ProcessedTransaction.effective_amount,
                     ),
                     else_=0,
@@ -123,7 +124,7 @@ def monthly_trend(
             func.sum(
                 case(
                     (
-                        ProcessedTransaction.effective_amount < 0,
+                        ProcessedTransaction.txn_type == "income",
                         -ProcessedTransaction.effective_amount,
                     ),
                     else_=0,
@@ -164,7 +165,7 @@ def monthly_trend(
     return result
 
 
-# ─── /split-ledger ────────────────────────────────────────────────────────────
+# ─── /split-ledger ──────────────────────────────────────────────────────────────────────────
 
 
 @router.get("/split-ledger", response_model=List[SplitLedgerRow])
@@ -209,7 +210,7 @@ def split_ledger(
     ]
 
 
-# ─── /ytd ─────────────────────────────────────────────────────────────────────
+# ─── /ytd ─────────────────────────────────────────────────────────────────────────────
 
 
 @router.get("/ytd", response_model=List[YTDRow])
@@ -238,6 +239,7 @@ def ytd(
             ProcessedTransaction.txn_date >= start,
             ProcessedTransaction.txn_date <= end,
             ProcessedTransaction.user_id == user_id,
+            ProcessedTransaction.txn_type.in_(["expense", "refund"]),
         )
         .group_by(Category.name)
     ).all()
