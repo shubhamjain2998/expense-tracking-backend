@@ -639,6 +639,9 @@ def _parse_table(
             col_map = _detect_columns_by_heuristic(table)
 
     if col_map is None:
+        for row in table:
+            parts = [c.strip() for c in row if (c or "").strip()]
+            skipped_rows.append(" | ".join(parts)[:120])
         return rows, len(table), None, skipped_rows
 
     ncols = max(len(row) for row in table) if table else 1
@@ -706,6 +709,10 @@ def parse_bank_statement(pdf_bytes: bytes) -> ParseResult:
 
                 if not _is_transaction_table(table):
                     result.skipped += len(table)
+                    for row in table:
+                        parts = [c.strip() for c in row if (c or "").strip()]
+                        if parts:
+                            result.skipped_rows.append(" | ".join(parts)[:120])
                     continue
 
                 page_rows, page_skipped, used_col_map, page_skipped_rows = _parse_table(
