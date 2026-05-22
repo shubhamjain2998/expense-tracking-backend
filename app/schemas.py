@@ -6,7 +6,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
-# ─── Categories ──────────────────────────────────────────────────────────────────────────
+# ─── Categories ────────────────────────────────────────────────────────────
 
 
 class CategoryOut(BaseModel):
@@ -24,7 +24,7 @@ class CategoryRename(BaseModel):
     name: str
 
 
-# ─── Tags ─────────────────────────────────────────────────────────────────────────────
+# ─── Tags ────────────────────────────────────────────────────────────────────────
 
 
 class TagOut(BaseModel):
@@ -38,7 +38,7 @@ class TagCreate(BaseModel):
     name: str
 
 
-# ─── Budget ────────────────────────────────────────────────────────────────────────
+# ─── Budget ────────────────────────────────────────────────────────────────────
 
 
 class BudgetEntryCreate(BaseModel):
@@ -76,7 +76,7 @@ class BudgetPlanOut(BaseModel):
         )
 
 
-# ─── Uploads ──────────────────────────────────────────────────────────────────────────
+# ─── Uploads ───────────────────────────────────────────────────────────────────
 
 
 class RawTransactionOut(BaseModel):
@@ -129,7 +129,7 @@ class CreateRawTransactionRequest(BaseModel):
         return v
 
 
-# ─── Transactions ────────────────────────────────────────────────────────────────────────
+# ─── Transactions ───────────────────────────────────────────────────────────────────
 
 
 class PersonShareIn(BaseModel):
@@ -241,7 +241,7 @@ class BulkTagRequest(BaseModel):
     tag_ids: List[uuid.UUID]
 
 
-# ─── Category mappings ────────────────────────────────────────────────────────────────
+# ─── Category mappings ────────────────────────────────────────────────────
 
 
 class CategoryMappingOut(BaseModel):
@@ -266,7 +266,7 @@ class CategoryMappingOut(BaseModel):
         )
 
 
-# ─── Persons ──────────────────────────────────────────────────────────────────────────
+# ─── Persons ───────────────────────────────────────────────────────────────────────
 
 
 class PersonOut(BaseModel):
@@ -280,7 +280,7 @@ class PersonCreate(BaseModel):
     name: str
 
 
-# ─── Dashboard ─────────────────────────────────────────────────────────────────────────
+# ─── Dashboard ────────────────────────────────────────────────────────────────────
 
 
 class SummaryRow(BaseModel):
@@ -311,7 +311,20 @@ class YTDRow(BaseModel):
     pct_used: Optional[float]
 
 
-# ─── Backup / Import / Export ───────────────────────────────────────────────────────────────
+class MultiMonthCategoryRow(BaseModel):
+    category: str
+    actual: Decimal
+
+
+class MultiMonthSummaryItem(BaseModel):
+    year: int
+    month: int  # calendar month (1=Jan … 12=Dec)
+    expense_total: Decimal
+    income_total: Decimal
+    category_breakdown: List[MultiMonthCategoryRow]
+
+
+# ─── Backup / Import / Export ─────────────────────────────────────────────────────────
 
 
 class BackupNamedEntity(BaseModel):

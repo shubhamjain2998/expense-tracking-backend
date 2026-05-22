@@ -16,10 +16,16 @@ from app.models import (
     TransactionPersonShare,
     transaction_tags,
 )
-from app.schemas import MonthlyTrendRow, SplitLedgerRow, SummaryRow, YTDRow
+from app.schemas import (
+    MonthlyTrendRow,
+    MultiMonthCategoryRow,
+    MultiMonthSummaryItem,
+    SplitLedgerRow,
+    SummaryRow,
+    YTDRow,
+)
 from app.services.period import (
     PeriodMode,
-    calendar_to_period_month,
     period_year_range,
     resolve_period_month,
 )
@@ -27,7 +33,7 @@ from app.services.period import (
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
-# ─── /summary ─────────────────────────────────────────────────────────────────────────────
+# ─── /summary ─────────────────────────────────────────────────────────────────────────────────
 
 
 @router.get("/summary", response_model=List[SummaryRow])
@@ -94,7 +100,7 @@ def summary(
     return result
 
 
-# ─── /monthly-trend ──────────────────────────────────────────────────────────────────────────
+# ─── /monthly-trend ────────────────────────────────────────────────────────────────────────
 
 
 @router.get("/monthly-trend", response_model=List[MonthlyTrendRow])
@@ -151,10 +157,13 @@ def monthly_trend(
         )
 
     rows = db.execute(query).all()
-    # Bucket into 1-12 period months for stable client-side ordering.
+    # Always return the raw calendar month (1=Jan … 12=Dec).
+    # period_mode controls which months are INCLUDED (Apr-Mar vs Jan-Dec),
+    # not how they are labelled. The DB stores ProcessedTransaction.month as
+    # a calendar month, so we return it unchanged.
     result = [
         MonthlyTrendRow(
-            month=calendar_to_period_month(row.year, row.month, period_mode),
+            month=row.month,
             actual_amount=Decimal(str(row.actual_amount or 0)),
             income_amount=Decimal(str(row.income_amount or 0)),
             txn_count=row.txn_count,
@@ -165,7 +174,95 @@ def monthly_trend(
     return result
 
 
-# ─── /split-ledger ──────────────────────────────────────────────────────────────────────────
+# ─── /multi-month-summary ────────────────────────────────────────────────────────────────
+
+
+@router.get("/multi-month-summary", response_model=List[MultiMonthSummaryItem])
+def multi_month_summary(
+    end_year: int,
+    end_month: int = Query(..., ge=1, le=12),
+    months: int = Query(6, ge=1, le=12),
+    tag_id: Optional[uuid.UUID] = None,
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+):
+    """Return per-category expense breakdown + income/expense totals for the
+    ``months`` calendar months ending at (end_year, end_month) inclusive.
+
+    Always works with calendar months regardless of the client's period_mode.
+    Replaces the frontend's per-month /dashboard/summary loop (finding 1.3).
+    """
+    cal_months: list = []
+    y, m = end_year, end_month
+    for _ in range(months):
+        cal_months.append((y, m))
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    cal_months.reverse()  # oldest first
+
+    result = []
+    for cal_year, cal_month in cal_months:
+        actual_query = (
+            select(
+                Category.name,
+                func.sum(ProcessedTransaction.effective_amount).label("actual"),
+            )
+            .join(Category, Category.id == ProcessedTransaction.category_id)
+            .where(
+                ProcessedTransaction.year == cal_year,
+                ProcessedTransaction.month == cal_month,
+                ProcessedTransaction.user_id == user_id,
+                ProcessedTransaction.txn_type.in_(["expense", "refund"]),
+            )
+            .group_by(Category.name)
+        )
+        if tag_id is not None:
+            actual_query = actual_query.where(
+                ProcessedTransaction.id.in_(
+                    select(transaction_tags.c.processed_txn_id).where(
+                        transaction_tags.c.tag_id == tag_id
+                    )
+                )
+            )
+        actual_rows = db.execute(actual_query).all()
+
+        income_scalar = db.execute(
+            select(func.sum(ProcessedTransaction.effective_amount)).where(
+                ProcessedTransaction.year == cal_year,
+                ProcessedTransaction.month == cal_month,
+                ProcessedTransaction.user_id == user_id,
+                ProcessedTransaction.txn_type == "income",
+            )
+        ).scalar()
+        # income transactions carry negative effective_amount; negate to get a positive total
+        income_total = Decimal(str(abs(income_scalar or 0)))
+
+        category_breakdown = []
+        expense_total = Decimal("0")
+        for row in sorted(actual_rows, key=lambda r: r.name):
+            actual = Decimal(str(row.actual))
+            if actual > 0:
+                category_breakdown.append(
+                    MultiMonthCategoryRow(category=row.name, actual=actual)
+                )
+                expense_total += actual
+
+        result.append(
+            MultiMonthSummaryItem(
+                year=cal_year,
+                month=cal_month,
+                expense_total=expense_total,
+                income_total=income_total,
+                category_breakdown=category_breakdown,
+            )
+        )
+
+    return result
+
+
+# ─── /split-ledger ──────────────────────────────────────────────────────────────────────
 
 
 @router.get("/split-ledger", response_model=List[SplitLedgerRow])
@@ -210,7 +307,7 @@ def split_ledger(
     ]
 
 
-# ─── /ytd ─────────────────────────────────────────────────────────────────────────────
+# ─── /ytd ────────────────────────────────────────────────────────────────────────────
 
 
 @router.get("/ytd", response_model=List[YTDRow])
