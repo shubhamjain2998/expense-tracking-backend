@@ -57,7 +57,7 @@ def _check_duplicate(content_hash: str, user_id: uuid.UUID, db: Session) -> None
             RawTransaction.upload_id == existing.id,
             RawTransaction.status != "deleted",
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
 
     if active is not None:
         raise HTTPException(
