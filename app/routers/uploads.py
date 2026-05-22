@@ -202,7 +202,7 @@ async def preview_statement(
         rows=[
             PreviewRow(
                 txn_date=r.txn_date,
-                description=r.description,
+                description=clean_description(r.description),
                 amount=Decimal(str(r.amount)),
             )
             for r in result.rows
@@ -231,7 +231,7 @@ def preview_text(
         rows=[
             PreviewRow(
                 txn_date=r.txn_date,
-                description=r.description,
+                description=clean_description(r.description),
                 amount=Decimal(str(r.amount)),
             )
             for r in result.rows
