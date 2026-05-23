@@ -18,6 +18,10 @@ flake8==7.3.0
 # Test framework + coverage
 pytest>=8
 pytest-cov>=5
+# Required by fastapi.testclient → starlette.testclient. Not pinned by
+# fastapi itself, so a clean Linux install would miss it without an
+# explicit dependency here.
+httpx>=0.28
 
 # Pre-commit harness
 pre-commit>=4
