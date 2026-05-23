@@ -1,3 +1,9 @@
+"""User registration, login, logout, and ``/auth/me``.
+
+JWTs (HS256) signed with ``SUPABASE_JWT_SECRET`` are set as ``httpOnly`` cookies
+and also returned in the response body for legacy clients.
+"""
+
 import uuid
 from datetime import datetime, timedelta, timezone
 

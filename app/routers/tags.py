@@ -1,3 +1,5 @@
+"""Free-form labels orthogonal to categories, attached to processed transactions."""
+
 import uuid
 from typing import List
 

@@ -1,0 +1,13 @@
+# Normalise line endings on checkin
+* text=auto eol=lf
+
+# Binary files (no line-ending normalisation, no text diffs)
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+
+# Generated / vendored files — collapse in PR diffs by default
+alembic/versions/*.py linguist-generated=false
