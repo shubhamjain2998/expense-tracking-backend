@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "expense-tracker-backend"
+version = "1.0.0"
+description = "FastAPI backend for tracking monthly expenses against an annual budget — PDF ingestion, fuzzy auto-categorisation, expense splits, analytics."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "Shubham Jain" }]
+keywords = ["fastapi", "personal-finance", "expense-tracker", "budget", "india"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: FastAPI",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
+]
+
+[project.urls]
+Homepage = "https://github.com/shubhamjain2998/expense-tracking-backend"
+Issues = "https://github.com/shubhamjain2998/expense-tracking-backend/issues"
+Changelog = "https://github.com/shubhamjain2998/expense-tracking-backend/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/shubhamjain2998/expense-tracking-backend/tree/main/docs"
+
+# ─── black ────────────────────────────────────────────────────────────────────
+[tool.black]
+line-length = 88
+target-version = ["py311", "py312"]
+extend-exclude = '''
+/(
+    \.venv
+  | venv
+  | alembic/versions
+)/
+'''
+
+# ─── pytest ───────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+filterwarnings = ["ignore::DeprecationWarning"]
+addopts = [
+    "--strict-markers",
+    "-ra",
+]
+
+# ─── coverage ─────────────────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = [
+    "app/__init__.py",
+    "app/routers/__init__.py",
+    "app/services/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "pragma: no cover",
+]
+show_missing = true
+skip_covered = false
+precision = 1
+# Current line+branch coverage hovers around 42%; the long-term target is 70%.
+# Bump this up as new tests land — never down.
+fail_under = 40

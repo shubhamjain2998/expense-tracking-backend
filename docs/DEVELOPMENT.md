@@ -20,8 +20,9 @@ cd expense-tracking-backend
 python -m venv venv
 source venv/bin/activate
 
-# 3. Dependencies
-pip install -r requirements.txt
+# 3. Dependencies (production + dev tooling)
+pip install -r requirements-dev.txt
+# (requirements-dev.txt pulls in the production lockfile transitively)
 
 # 4. Environment file
 cp .env.example .env
@@ -49,7 +50,7 @@ python server.py
 ```bash
 source venv/bin/activate
 git pull
-pip install -r requirements.txt    # only when requirements.txt changed
+pip-sync requirements-dev.txt      # only when either lockfile changed
 alembic upgrade head               # only when new migrations landed
 python server.py
 ```
@@ -105,17 +106,23 @@ A real example lives at [`scripts/backfill_clean_descriptions.py`](../scripts/ba
 
 ### Add a dependency
 
+Dependencies are managed with [pip-tools](https://github.com/jazzband/pip-tools). Never edit `requirements*.txt` by hand — they are generated.
+
 ```bash
-# 1. Add the pinned line to requirements.txt
-echo "rich==13.9.4" >> requirements.txt
+# 1. Add the new line to requirements.in (production) or requirements-dev.in (dev only).
+echo "rich" >> requirements.in   # version-pin only if you have a reason
 
-# 2. Install
-pip install -r requirements.txt
+# 2. Recompile the lockfile(s).
+pip-compile --generate-hashes --strip-extras requirements.in -o requirements.txt
+pip-compile --generate-hashes --strip-extras --allow-unsafe requirements-dev.in -o requirements-dev.txt
 
-# 3. Commit requirements.txt with the change that needs it
+# 3. Sync your local env.
+pip-sync requirements-dev.txt
+
+# 4. Commit both the .in and .txt changes together.
 ```
 
-(A `pip-tools`-based lockfile is on the [roadmap](ROADMAP.md) — until then, pin exactly.)
+`pip-sync` will install missing packages **and** remove anything not in the lockfile — so it leaves you with exactly the set CI will see.
 
 ### Reset the local database
 
