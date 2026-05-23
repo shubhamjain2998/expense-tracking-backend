@@ -1,3 +1,13 @@
+"""SQLAlchemy table definitions for every domain entity.
+
+Kept intentionally in a single file so the full schema is greppable in one
+place and the import graph stays trivial. Every domain table mixes in
+``TimestampMixin`` for ``created_at`` / ``updated_at`` and carries a top-level
+``user_id`` column so queries can scope by owner without joins.
+
+Schema changes go through Alembic — see ``docs/DATABASE.md``.
+"""
+
 import uuid
 from datetime import date, datetime, timezone
 from typing import List, Optional
@@ -260,7 +270,7 @@ class Person(TimestampMixin, Base):
     )
 
 
-# ─── Processed transactions ───────────────────────────────────────────────────────────────
+# ─── Processed transactions ──────────────────────────────────────────────────
 
 
 class ProcessedTransaction(TimestampMixin, Base):

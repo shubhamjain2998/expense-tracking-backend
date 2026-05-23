@@ -1,3 +1,15 @@
+"""FastAPI application entry point.
+
+Wires every router into a single ``app`` instance, configures CORS for the
+single ``FRONTEND_ORIGIN`` (wildcard is forbidden when ``allow_credentials`` is
+true), and installs a catch-all exception handler so CORS headers attach even
+on 500 responses — without it, Starlette's ``ServerErrorMiddleware`` returns a
+bare 500 and the browser surfaces a misleading "blocked by CORS policy" error.
+
+Run locally with ``python server.py`` (uvicorn + reload) or
+``uvicorn app.main:app --reload`` directly.
+"""
+
 import logging
 
 from fastapi import FastAPI, Request

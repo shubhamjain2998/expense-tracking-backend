@@ -1,3 +1,9 @@
+"""Analytics endpoints — budget vs. actual, trends, and split ledger.
+
+All endpoints accept ``period_mode=calendar|fy``; see ``services/period.py``
+for the conversion from calendar to Indian financial year.
+"""
+
 import uuid
 from decimal import Decimal
 from typing import List, Optional
@@ -33,7 +39,7 @@ from app.services.period import (
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
-# ─── /summary ─────────────────────────────────────────────────────────────────────────────────
+# ─── /summary ────────────────────────────────────────────────────────────────
 
 
 @router.get("/summary", response_model=List[SummaryRow])
@@ -100,7 +106,7 @@ def summary(
     return result
 
 
-# ─── /monthly-trend ────────────────────────────────────────────────────────────────────────
+# ─── /monthly-trend ──────────────────────────────────────────────────────────
 
 
 @router.get("/monthly-trend", response_model=List[MonthlyTrendRow])
@@ -174,7 +180,7 @@ def monthly_trend(
     return result
 
 
-# ─── /multi-month-summary ────────────────────────────────────────────────────────────────
+# ─── /multi-month-summary ────────────────────────────────────────────────────
 
 
 @router.get("/multi-month-summary", response_model=List[MultiMonthSummaryItem])
@@ -236,7 +242,7 @@ def multi_month_summary(
                 ProcessedTransaction.txn_type == "income",
             )
         ).scalar()
-        # income transactions carry negative effective_amount; negate to get a positive total
+        # income rows carry negative effective_amount; negate to get a positive total
         income_total = Decimal(str(abs(income_scalar or 0)))
 
         category_breakdown = []
@@ -262,7 +268,7 @@ def multi_month_summary(
     return result
 
 
-# ─── /split-ledger ──────────────────────────────────────────────────────────────────────
+# ─── /split-ledger ───────────────────────────────────────────────────────────
 
 
 @router.get("/split-ledger", response_model=List[SplitLedgerRow])

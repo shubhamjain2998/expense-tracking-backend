@@ -1,3 +1,11 @@
+"""Raw-transaction review, auto-categorisation, and manual processing.
+
+Raw rows are soft-deletable holding-area entries; processed rows are the
+analytics-ready table read by ``dashboard``. Auto-categorise promotes raw rows
+to processed when a learned category mapping matches their description at
+``RapidFuzz.token_sort_ratio`` ≥ 80.
+"""
+
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -51,7 +59,7 @@ _TRANSFER_PATTERNS = (
 
 
 def classify_txn_type(description: str, amount: Decimal) -> str:
-    """Classify a transaction into expense/income/refund/transfer based on amount and description."""
+    """Classify into expense/income/refund/transfer from amount and description."""
     if amount > 0:
         return "expense"
     desc_upper = description.upper()
@@ -346,7 +354,7 @@ def auto_categorise(
     )
 
 
-# ─── Manual processing ────────────────────────────────────────────────────────────────────
+# ─── Manual processing ───────────────────────────────────────────────────────
 
 
 @router.get("/pending-manual", response_model=List[RawTransactionOut])

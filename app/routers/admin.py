@@ -1,3 +1,5 @@
+"""Per-user bulk-wipe endpoints used during development and for self-reset."""
+
 import uuid
 
 from fastapi import APIRouter, Depends

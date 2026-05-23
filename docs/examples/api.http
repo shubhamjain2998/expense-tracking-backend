@@ -1,0 +1,171 @@
+### Expense Tracker API — example requests
+### Compatible with the VS Code REST Client extension and the JetBrains HTTP client.
+###
+### Workflow:
+###   1. Run "Register" or "Login". The response sets a `token` cookie that
+###      subsequent requests reuse automatically.
+###   2. Run "Create a category", "Add a budget", etc. in order.
+###   3. Replace the @cat_id / @raw_id variables with values returned by earlier requests.
+
+@host = http://localhost:8000
+@email = demo@example.com
+@password = correct-horse-battery-staple
+
+### Health check (no auth required)
+GET {{host}}/health
+
+###
+
+### Register — sets `token` cookie + returns access_token
+POST {{host}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+###
+
+### Login — sets `token` cookie + returns access_token
+POST {{host}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+###
+
+### Who am I?
+GET {{host}}/auth/me
+
+###
+
+### Create a category
+POST {{host}}/categories
+Content-Type: application/json
+
+{ "name": "groceries" }
+
+###
+
+### List categories
+GET {{host}}/categories
+
+###
+
+### Create a budget for a year (replace category_id with one from the list above)
+@cat_id = REPLACE_WITH_CATEGORY_UUID
+
+POST {{host}}/budget
+Content-Type: application/json
+
+{
+  "year": 2026,
+  "entries": [
+    { "category_id": "{{cat_id}}", "allocated_amount": 60000 }
+  ]
+}
+
+###
+
+### Get this year's budget
+GET {{host}}/budget/2026
+
+###
+
+### Add a person to split with
+POST {{host}}/persons
+Content-Type: application/json
+
+{ "name": "alex" }
+
+###
+
+### Add a tag
+POST {{host}}/tags
+Content-Type: application/json
+
+{ "name": "work-reimbursable" }
+
+###
+
+### List raw transactions
+GET {{host}}/transactions/raw
+
+###
+
+### Manually add a raw transaction (skip the PDF for now)
+POST {{host}}/transactions/raw
+Content-Type: application/json
+
+{
+  "txn_date": "2026-05-12",
+  "description": "BLINKIT BANGALORE",
+  "amount": 480.50
+}
+
+###
+
+### Auto-categorise pending raw rows
+POST {{host}}/transactions/auto-categorise
+Content-Type: application/json
+
+{ "save_mapping": false }
+
+###
+
+### Manually process one raw row (use a raw_txn_id from the list above)
+@raw_id = REPLACE_WITH_RAW_TXN_UUID
+@person_id = REPLACE_WITH_PERSON_UUID
+
+POST {{host}}/transactions/process
+Content-Type: application/json
+
+{
+  "raw_txn_id": "{{raw_id}}",
+  "category_id": "{{cat_id}}",
+  "tag_ids": [],
+  "shares": [
+    { "person_id": "{{person_id}}", "share_type": "percentage", "share_value": 50 }
+  ],
+  "notes": "split with Alex",
+  "save_mapping": true
+}
+
+###
+
+### List processed transactions for a month
+GET {{host}}/transactions/processed?year=2026&month=5
+
+###
+
+### Dashboard — summary for one month (calendar mode)
+GET {{host}}/dashboard/summary?year=2026&month=5&period_mode=calendar
+
+###
+
+### Dashboard — monthly trend for a year
+GET {{host}}/dashboard/monthly-trend?year=2026&period_mode=calendar
+
+###
+
+### Dashboard — split ledger
+GET {{host}}/dashboard/split-ledger
+
+###
+
+### Dashboard — same call, financial-year mode (FY 25-26)
+GET {{host}}/dashboard/summary?year=2025&month=1&period_mode=fy
+
+###
+
+### Export everything as JSON
+GET {{host}}/backup/export
+
+###
+
+### Logout — clears the token cookie
+POST {{host}}/auth/logout

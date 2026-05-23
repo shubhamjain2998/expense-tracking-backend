@@ -1,0 +1,67 @@
+name: Bug report
+description: Report something that isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please fill out the sections below so we can reproduce and triage quickly.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps that reliably trigger the bug. Include the exact request (method + path + body) or curl command if relevant.
+      placeholder: |
+        1. POST /uploads/statement with attached PDF
+        2. Observe response: 500
+        3. Server log shows ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the response body, status code, and any relevant server-log lines.
+    validations:
+      required: true
+
+  - type: input
+    id: api-version
+    attributes:
+      label: API version / commit
+      description: Tag (e.g. v1.0.0) or commit SHA the bug was observed against.
+    validations:
+      required: false
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: e.g. 3.11.9
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else worth knowing (related issues, recent migrations, environment).
+    validations:
+      required: false

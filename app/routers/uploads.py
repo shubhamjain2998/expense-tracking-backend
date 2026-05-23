@@ -1,3 +1,9 @@
+"""Statement ingestion — parse PDF / pasted text and persist raw transactions.
+
+Files are SHA-256 hashed and recorded in ``uploaded_files``; subsequent uploads
+of the same body return 409 Conflict.
+"""
+
 import hashlib
 import uuid
 from decimal import Decimal
@@ -52,12 +58,16 @@ def _check_duplicate(content_hash: str, user_id: uuid.UUID, db: Session) -> None
         return
 
     # Check if any non-deleted raw transactions still reference this upload
-    active = db.execute(
-        select(RawTransaction).where(
-            RawTransaction.upload_id == existing.id,
-            RawTransaction.status != "deleted",
+    active = (
+        db.execute(
+            select(RawTransaction).where(
+                RawTransaction.upload_id == existing.id,
+                RawTransaction.status != "deleted",
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
     if active is not None:
         raise HTTPException(

@@ -1,237 +1,145 @@
 # Expense Tracker — Backend
 
-FastAPI backend for a personal finance app that tracks monthly spending against an annual budget. Parses bank/card statement PDFs, auto-categorises transactions using fuzzy matching, supports expense splitting, and exposes analytics endpoints.
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/fastapi-0.115-009688.svg)](https://fastapi.tiangolo.com/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-fa6673.svg)](https://www.conventionalcommits.org)
 
-**Deployment target:** Backend → Render · Database → Supabase (PostgreSQL)
-
----
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                        Frontend (Vercel)                     │
-│                     React + Vite + TypeScript                │
-└────────────────────────────┬─────────────────────────────────┘
-                             │ HTTPS / REST
-┌────────────────────────────▼─────────────────────────────────┐
-│                       Backend (Render)                       │
-│                     FastAPI + SQLAlchemy                     │
-│                                                              │
-│  /budget        budget plans per year                        │
-│  /uploads       PDF ingest (pdfplumber, in-memory)           │
-│  /transactions  raw review, auto-categorise, manual process  │
-│  /categories    mapping management + category list           │
-│  /persons       expense-split participants                   │
-│  /dashboard     summary, trend, split-ledger, YTD            │
-└────────────────────────────┬─────────────────────────────────┘
-                             │
-┌────────────────────────────▼─────────────────────────────────┐
-│                     Database (Supabase)                      │
-│                         PostgreSQL                           │
-└──────────────────────────────────────────────────────────────┘
-```
-
-## Data Flow
-
-```
-Bank PDF
-   │
-   ▼
-POST /uploads/statement
-   │  pdfplumber parses in-memory
-   ▼
-raw_transactions (status=pending)
-   │
-   ├──► POST /transactions/auto-categorise
-   │        RapidFuzz token_sort_ratio ≥ 80 against category_mappings
-   │        → processed_transactions (status=processed)
-   │
-   └──► POST /transactions/process  (manual)
-            category + split_count + person_ids
-            → processed_transactions
-            → transaction_persons (many-to-many)
-                │
-                ▼
-          GET /dashboard/*
-          summary | monthly-trend | split-ledger | ytd
-```
+> FastAPI backend for a personal finance app that ingests Indian bank-statement PDFs, auto-categorises transactions with fuzzy matching, supports expense splits between people, and exposes analytics for monthly and year-to-date spend against an annual budget.
 
 ---
 
-## How it works
+## What is this?
 
-The API is organised around four phases:
+A self-hosted REST API for tracking personal expenses against an **annual** budget. It is built for one user at a time (multi-tenant by `user_id`, but no team features) and is opinionated for the Indian context — INR-aware amounts, financial-year period mode (April → March), and parsers tuned for HDFC / Axis / SBI statement formats.
 
-```
-Setup (once/year)   →   Ingest (monthly)   →   Process   →   Analyse
-Configure budget        Upload PDF              Categorise      Dashboard
-```
+It is the backend half of a two-repository project. The frontend lives at **[shubhamjain2998/expense-tracking-frontend](https://github.com/shubhamjain2998/expense-tracking-frontend)** — see [Companion frontend](#companion-frontend) below.
 
-**Setup** — Define an annual budget: a list of categories (Groceries, Rent, Travel, …) with allocated monthly amounts. Stored once in `budget_plans`.
+## Highlights
 
-**Ingest** — Accept a PDF bank or card statement, parse it in-memory with `pdfplumber` (no file written to disk), extract rows (date · description · amount), and save them to `raw_transactions` with `status=pending`.
-
-**Process** — Three steps:
-1. Review the raw table and soft-delete any non-expense rows (transfers, payments, etc.).
-2. Run auto-categorisation — RapidFuzz matches each description against known `category_mappings`. Matches ≥ 80% are pre-filled automatically.
-3. Manually assign categories for unmatched rows. Optionally save the mapping so it auto-applies next month.
-
-**Analyse** — Endpoints return budget vs. actual per category, monthly trend data, year-to-date totals, and a split ledger showing each person's share of shared expenses.
-
----
+- **PDF ingestion** — uploads are parsed in memory with `pdfplumber`; no statement file is ever written to disk.
+- **Duplicate guard** — SHA-256 of the file body is recorded so the same statement cannot be imported twice.
+- **Fuzzy auto-categorisation** — `RapidFuzz` matches each transaction description against learned `category_mappings` at ≥ 80% similarity.
+- **Expense splits** — every processed transaction can be shared between people by percentage or fixed amount; per-share settlement is tracked.
+- **Period-aware analytics** — endpoints accept `period_mode=calendar|fy` so the same `(year, month)` parameters work for both Jan–Dec and Apr–Mar reporting.
+- **Cookie-first auth** — `httpOnly` cookie is the preferred path; `Authorization: Bearer` is still accepted for backwards compatibility.
+- **Soft delete + restore** — raw transactions are never hard-deleted, so import history is auditable and recoverable.
 
 ## Tech stack
 
-| | |
-|---|---|
-| Runtime | Python 3.12 |
-| Framework | FastAPI · Uvicorn |
-| Validation | Pydantic v2 |
-| ORM / migrations | SQLAlchemy 2 · Alembic |
-| Database | PostgreSQL |
-| PDF parsing | pdfplumber |
-| Fuzzy matching | RapidFuzz |
-| Analytics | Pandas |
-
----
-
-## Project structure
-
-```
-backend/
-├── app/
-│   ├── main.py          FastAPI app + router registration
-│   ├── models.py        SQLAlchemy ORM models
-│   ├── database.py      DB connection / session
-│   └── routers/
-│       ├── budget.py        Phase 1 — budget plan CRUD
-│       ├── uploads.py       Phase 2 — PDF ingestion
-│       ├── transactions.py  Phase 3 — raw review + processing
-│       ├── categories.py    Phase 3 — mapping management
-│       ├── persons.py       Phase 3 — person management
-│       └── dashboard.py     Phase 4 — analytics endpoints
-├── alembic/             DB migration scripts
-├── requirements.txt
-└── .env.example
-```
-
----
-
-## Database schema
-
-| Table | Purpose |
-|---|---|
-| `budget_plans` | Year · category · allocated amount |
-| `raw_transactions` | Rows extracted from PDF; status: `pending` / `deleted` / `processed` |
-| `processed_transactions` | Categorised transactions with effective amount after splitting |
-| `category_mappings` | Description pattern → category; used for auto-categorisation |
-| `persons` | People who can share expenses |
-| `transaction_persons` | Many-to-many join between processed transactions and persons |
-
----
-
-## API overview
-
-### Phase 1 — Budget (`/budget`)
-
-| Method | Path | Description |
+| Layer | Tool | Version |
 |---|---|---|
-| `POST` | `/budget` | Create annual budget (year + category list) |
-| `GET` | `/budget/{year}` | Fetch all entries for a year |
-| `PUT` | `/budget/{id}` | Update a single entry |
-| `DELETE` | `/budget/{id}` | Delete a single entry |
+| Web framework | FastAPI | `0.115.6` |
+| ASGI server | Uvicorn | `0.32.1` |
+| ORM | SQLAlchemy | `2.0.36` |
+| Migrations | Alembic | `1.14.0` |
+| Database | PostgreSQL (Supabase) | 15+ |
+| PDF parsing | pdfplumber | `0.11.4` |
+| Fuzzy matching | RapidFuzz | `3.10.1` |
+| Validation | Pydantic | `2.10.3` |
+| Auth | PyJWT + bcrypt | `2.12.1` / `4.2.1` |
+| Tests | pytest | `8+` |
+| Lint / format | flake8 + black | `7.3` / `25.11` |
 
-### Phase 2 — Ingest (`/uploads`)
+Python 3.11 or newer is required.
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/uploads/statement` | Upload PDF; returns `{ inserted, skipped, rows }` |
-| `POST` | `/uploads/preview` | Dry-run parse — returns what would be inserted without saving |
-
-### Phase 3 — Process (`/transactions`, `/categories`, `/persons`)
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/transactions/raw` | List pending raw transactions |
-| `DELETE` | `/transactions/raw/{id}` | Soft-delete a row |
-| `PATCH` | `/transactions/raw/{id}/restore` | Restore a soft-deleted row |
-| `POST` | `/transactions/auto-categorise` | Run RapidFuzz over all pending rows |
-| `GET` | `/transactions/pending-manual` | Rows still needing manual assignment |
-| `POST` | `/transactions/process` | Categorise a row; optionally split and save mapping |
-| `PATCH` | `/transactions/processed/{id}` | Edit a processed transaction |
-| `GET` | `/categories` | List all saved mappings |
-| `GET` | `/categories/list` | Distinct category names (for dropdowns) |
-| `DELETE` | `/categories/{id}` | Remove a mapping |
-| `GET` | `/persons` | List all persons |
-| `POST` | `/persons` | Add a person |
-| `DELETE` | `/persons/{id}` | Remove a person (blocked if linked to transactions) |
-
-### Phase 4 — Analyse (`/dashboard`)
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/dashboard/summary` | Budget vs. actual per category for a month |
-| `GET` | `/dashboard/monthly-trend` | Month-by-month spend for a year (optionally by category) |
-| `GET` | `/dashboard/split-ledger` | Per-person total for shared expenses |
-| `GET` | `/dashboard/ytd` | Year-to-date totals per category |
-
----
-
-## Local setup
-
-**Prerequisites:** Python 3.12 · PostgreSQL
+## Quick start
 
 ```bash
-cd backend
-python -m venv venv
-source venv/bin/activate
+git clone git@github.com:shubhamjain2998/expense-tracking-backend.git
+cd expense-tracking-backend
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-
-cp .env.example .env
-# Set DATABASE_URL=postgresql://user:password@host:5432/dbname
-
+cp .env.example .env       # then edit DATABASE_URL + SUPABASE_JWT_SECRET
 alembic upgrade head
-uvicorn app.main:app --reload
+python server.py           # http://localhost:8000
 ```
 
-API docs: `http://localhost:8000/docs`
+Swagger UI is then available at <http://localhost:8000/docs>, ReDoc at <http://localhost:8000/redoc>, and a health probe at <http://localhost:8000/health>.
 
----
+See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for the full local-development walkthrough.
 
-## Development
+## Repository tour
 
-### Pre-commit hooks
-
-The repo uses [pre-commit](https://pre-commit.com/) with **black** (formatter) and **flake8** (linter).
-
-Install once after cloning:
-
-```bash
-pre-commit install
+```
+.
+├── app/                   # FastAPI application package
+│   ├── main.py            #   entry point + middleware + router wiring
+│   ├── config.py          #   pydantic-settings (env vars)
+│   ├── database.py        #   SQLAlchemy engine + session factory
+│   ├── models.py          #   all SQLAlchemy table definitions
+│   ├── schemas.py         #   all Pydantic request / response models
+│   ├── auth.py            #   JWT dependency (cookie or bearer)
+│   ├── routers/           #   one file per domain (auth, budget, …)
+│   └── services/          #   pdf_parser, text_parser, normalizer, period helpers
+├── alembic/               # database migrations (versions/ holds the chain)
+├── tests/                 # pytest suite + fixtures
+├── scripts/               # one-off maintenance scripts
+├── docs/                  # architecture, API, database, deployment, etc.
+├── server.py              # uvicorn launcher for local dev
+└── requirements.txt       # production dependencies
 ```
 
-Hooks run automatically on `git commit`. If black reformats any files, stage the changes and commit again.
+## How it works
 
-### Creating migrations
-
-After changing `app/models.py`:
-
-```bash
-alembic revision --autogenerate -m "describe the change"
-alembic upgrade head
+```
+Setup (once/year)   →   Ingest (monthly)   →   Process       →   Analyse
+Configure budget        Upload PDF              Auto + manual     Dashboard
 ```
 
----
+**Setup** — Define an annual budget: a list of categories (Groceries, Rent, Travel, …) with allocated monthly amounts, stored once in `budget_plans`.
 
-## Key design decisions
+**Ingest** — Accept a PDF bank or card statement, parse it in memory with `pdfplumber`, extract rows (date · description · amount), and save them to `raw_transactions` with `status=pending`.
 
-**PDF never touches disk** — the file is parsed entirely in-memory by `pdfplumber` and discarded. Only the extracted rows are persisted.
+**Process** — Review the raw table and soft-delete non-expense rows; then `POST /transactions/auto-categorise` runs RapidFuzz over learned mappings and pre-fills matches ≥ 80%; manually assign the rest with `POST /transactions/process`, optionally saving the mapping so it auto-applies next month.
 
-**Fuzzy matching threshold of 80%** — RapidFuzz `token_sort_ratio` handles minor wording variations in merchant names without requiring exact matches.
+**Analyse** — `/dashboard/*` returns budget vs. actual per category, monthly trend, year-to-date totals, and a split ledger showing each person's share of shared expenses.
 
-**Soft deletes on raw transactions** — rows are marked `deleted` rather than removed, so nothing is lost if a row is accidentally deleted.
+A full architecture diagram lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-**Split expenses** — `effective_amount = amount / split_count`, so shared expenses are apportioned correctly in budget comparisons.
+## Companion frontend
 
-**Mappings auto-improve** — each time a mapping is used, `match_count` and `last_used` are updated, building a record of how reliable each pattern is over time.
+This API is consumed by the React + TypeScript SPA at **[shubhamjain2998/expense-tracking-frontend](https://github.com/shubhamjain2998/expense-tracking-frontend)**.
+
+```
+┌─────────────────────────┐      HTTPS / JSON      ┌─────────────────────────┐
+│  Frontend (Vercel)      │ ─────────────────────▶ │  Backend (Render)       │
+│  React + Vite + TS      │                        │  FastAPI + SQLAlchemy   │
+└─────────────────────────┘                        └────────────┬────────────┘
+                                                                │
+                                                                ▼
+                                                   ┌─────────────────────────┐
+                                                   │  Database (Supabase)    │
+                                                   │  PostgreSQL             │
+                                                   └─────────────────────────┘
+```
+
+The two repositories are versioned independently. CORS is configured per the `FRONTEND_ORIGIN` env var, and auth tokens are exchanged via `httpOnly` cookies (preferred) or `Authorization: Bearer` (legacy).
+
+## Documentation
+
+| Document | What's inside |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System design, module breakdown, request lifecycle, key design decisions. |
+| [`docs/API.md`](docs/API.md) | Curated endpoint reference grouped by domain; sample requests and responses. Points to Swagger for the full schema. |
+| [`docs/DATABASE.md`](docs/DATABASE.md) | Mermaid ERD, table-by-table description, migrations workflow. |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Render + Supabase setup; env var reference; troubleshooting. |
+| [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Local dev walkthrough; how to add an endpoint / model / migration. |
+| [`docs/TESTING.md`](docs/TESTING.md) | pytest layout, fixtures, coverage expectations. |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | What's shipped, what's in-flight, what's planned. |
+| [`docs/FAQ.md`](docs/FAQ.md) | Recurring questions a new contributor would ask. |
+| [`docs/GLOSSARY.md`](docs/GLOSSARY.md) | Domain terms (raw vs. processed transaction, mapping, share, settlement, …). |
+| [`docs/examples/api.http`](docs/examples/api.http) | Runnable requests for VS Code REST Client / JetBrains HTTP client. |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release history. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Commit conventions, branch naming, PR checklist. |
+| [`SECURITY.md`](SECURITY.md) | Vulnerability reporting policy. |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) | Community standards. |
+
+## Project status
+
+Tagged `v1.0.0` is the latest release. Active development continues — see [`docs/ROADMAP.md`](docs/ROADMAP.md) for what's planned. Issues and discussions are open; see [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a PR.
+
+## License
+
+[MIT](LICENSE) © 2026 Shubham Jain.

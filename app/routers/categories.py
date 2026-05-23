@@ -1,3 +1,5 @@
+"""User-defined budgeting categories — list, create, rename, delete."""
+
 import uuid
 from typing import List
 

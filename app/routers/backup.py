@@ -1,3 +1,5 @@
+"""JSON export / import of a user's full data set (see services/backup.py)."""
+
 import uuid
 
 from fastapi import APIRouter, Depends

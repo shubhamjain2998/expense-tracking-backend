@@ -1,3 +1,5 @@
+"""Annual budget plans: one allocation per (year, category)."""
+
 import uuid
 from typing import List
 

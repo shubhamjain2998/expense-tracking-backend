@@ -1,3 +1,5 @@
+"""Learned description-pattern → category rules used by auto-categorise."""
+
 import uuid
 from typing import List
 

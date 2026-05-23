@@ -1,3 +1,5 @@
+"""Persons you split expenses with — referenced from transaction_person_shares."""
+
 import uuid
 from typing import List
 
