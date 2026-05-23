@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.flake8` — moved flake8 config out of `.pre-commit-config.yaml` so CI and pre-commit share one source of truth.
 - `[tool.bandit]` block in `pyproject.toml`; new `bandit` hook in `.pre-commit-config.yaml`.
 - CI status badge in `README.md`.
+- [`commitizen`](https://commitizen-tools.github.io/commitizen/) — Conventional-Commits validation via a `commit-msg` pre-commit hook, plus `cz bump` for one-command version bumping and tagging. `[tool.commitizen]` in `pyproject.toml`; release workflow documented in `CONTRIBUTING.md`.
+- `.github/workflows/lockfile.yml` — manually-triggered workflow that regenerates `requirements.txt` and `requirements-dev.txt` on Linux Python 3.11 (the platform CI installs against) and commits the result back to the branch it was triggered from. Necessary because the maintainer's local venv is Py3.9 on macOS, where pip cannot see Py3.10+-only conditional constraints.
 
 ### Fixed
 - `tests/test_auth_cookie.py` — 6 tests were failing on `main` because their `"pw"` / `"hunter2"` passwords pre-dated the `v1.0.0` `min_length=8` rule. Bumped to 8+ char passwords so the full suite passes.

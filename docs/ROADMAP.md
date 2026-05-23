@@ -15,8 +15,8 @@ Repo hardening (this pass):
 - **PR 1** — README rewrite + `docs/` tree + repo-health metadata + `.github/` templates. ✅ Shipped.
 - **PR 2** — Backfill historical tags (`v0.1.0` → `v0.9.0`) with GitHub Releases; complete `CHANGELOG.md`. ✅ Shipped.
 - **PR 3** — `pyproject.toml`, pip-tools lockfile (`requirements.in` → hash-pinned `requirements.txt`), `pytest-cov` with `fail_under=40` (long-term target 70+). ✅ Shipped.
-- **PR 4** *(this PR)* — GitHub Actions CI (Python 3.11 + 3.12 matrix, `black --check` + `flake8` + `pytest --cov` + bandit, pip-audit non-blocking).
-- **PR 5** — `commitizen` for conventional-commit enforcement and version bumping.
+- **PR 4** — GitHub Actions CI (Python 3.11 + 3.12 matrix, `black --check` + `flake8` + `pytest --cov` + bandit, pip-audit non-blocking). ✅ Shipped.
+- **PR 5** *(this PR)* — `commitizen` for conventional-commit enforcement (commit-msg pre-commit hook) and `cz bump` for one-command version + tag automation. Completes the repo-hardening pass.
 
 ## Planned
 

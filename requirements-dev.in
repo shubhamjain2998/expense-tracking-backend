@@ -35,3 +35,6 @@ virtualenv<21
 # Security scanners — used in CI and (bandit) in pre-commit
 bandit[toml]>=1.7
 pip-audit>=2.7
+
+# Conventional-commit linting + version bumping
+commitizen>=3.30

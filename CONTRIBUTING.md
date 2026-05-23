@@ -25,8 +25,9 @@ cp .env.example .env
 # 5. Apply database migrations
 alembic upgrade head
 
-# 6. Install pre-commit hooks
-pre-commit install
+# 6. Install pre-commit hooks (both the pre-commit and commit-msg hooks)
+pre-commit install --install-hooks
+pre-commit install --hook-type commit-msg
 
 # 7. Run the dev server
 python server.py
@@ -70,6 +71,17 @@ fix(transactions): classify refund rows correctly
 chore(deps): bump fastapi to 0.116
 test(auth): cover expired-token branch
 ```
+
+The format is enforced by [`commitizen`](https://commitizen-tools.github.io/commitizen/) via a `commit-msg` pre-commit hook. `git commit` will reject messages that do not parse as Conventional Commits — local validation is identical to what CI sees.
+
+Quick reference:
+
+| Command | What it does |
+|---|---|
+| `cz commit` | Interactive commit-message builder. Walks you through type / scope / message / breaking-change flags. |
+| `cz check --message "feat(api): add /healthz"` | Manually validate one message without committing. |
+| `cz bump` | Bump the version in `pyproject.toml` based on commits since the last tag, create an annotated `vX.Y.Z` tag, and stage the change. Run this when cutting a release. |
+| `cz bump --dry-run` | Preview the next version without changing anything. |
 
 ## PR checklist
 
@@ -165,3 +177,24 @@ Never edit a migration after it has been applied to a shared environment. Add a 
 ## Releases
 
 Releases follow [Semantic Versioning](https://semver.org/) and are published from `main` via annotated git tags (`vX.Y.Z`). Each release has a corresponding [GitHub Release](https://github.com/shubhamjain2998/expense-tracking-backend/releases) and a [`CHANGELOG.md`](CHANGELOG.md) entry — please move the relevant `[Unreleased]` notes into a new version section when cutting a release.
+
+To cut a release:
+
+```bash
+# 1. Make sure CHANGELOG.md's [Unreleased] section is up to date.
+
+# 2. Preview which version commitizen would pick (major / minor / patch).
+cz bump --dry-run
+
+# 3. Apply the bump: updates pyproject.toml [project].version, commits the
+#    bump, creates an annotated `vX.Y.Z` tag.
+cz bump
+
+# 4. Push the bump commit and tag.
+git push --follow-tags
+
+# 5. Create the GitHub Release from the matching CHANGELOG section.
+gh release create vX.Y.Z --notes-file <(awk '/^## \[X\.Y\.Z\]/,/^## \[/' CHANGELOG.md)
+```
+
+The version `cz bump` picks is determined by the commits since the last tag: `fix:` → patch, `feat:` → minor, anything with `BREAKING CHANGE:` in the body or a `!` after the type → major.
