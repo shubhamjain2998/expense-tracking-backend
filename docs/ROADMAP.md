@@ -6,14 +6,14 @@ This file lists what is shipped, in-flight, and planned. The authoritative shipp
 
 See [`CHANGELOG.md`](../CHANGELOG.md) and the [Releases page](https://github.com/shubhamjain2998/expense-tracking-backend/releases).
 
-The current latest is **`v1.0.0`**.
+The current latest is **`v1.0.0`**. Tags `v0.1.0` → `v0.9.0` cover the historical milestones (PDF ingest, first end-to-end API, splits + tags, multi-user JWT, data-hygiene round, FY mode + backup + QA round 1).
 
 ## In flight
 
 Repo hardening (this pass):
 
-- **PR 1** *(this PR)* — README rewrite + `docs/` tree + repo-health metadata + `.github/` templates.
-- **PR 2** — Backfill historical tags (`v0.1.0` → `v0.9.x`) with GitHub Releases; complete `CHANGELOG.md`.
+- **PR 1** — README rewrite + `docs/` tree + repo-health metadata + `.github/` templates. ✅ Shipped.
+- **PR 2** *(this PR)* — Backfill historical tags (`v0.1.0` → `v0.9.0`) with GitHub Releases; complete `CHANGELOG.md`.
 - **PR 3** — `pyproject.toml`, pip-tools lockfile (`requirements.in` → hash-pinned `requirements.txt`), `pytest-cov` with a 70% coverage threshold.
 - **PR 4** — GitHub Actions CI (Python 3.11 + 3.12 matrix, Postgres service container, `flake8` + `black --check` + `pytest --cov`); `pip-audit` and `bandit` in CI and pre-commit.
 - **PR 5** — `commitizen` for conventional-commit enforcement and version bumping.
