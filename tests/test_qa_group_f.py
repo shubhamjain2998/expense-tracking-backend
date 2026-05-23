@@ -14,7 +14,12 @@ os.environ.setdefault("SUPABASE_JWT_SECRET", "pytest-placeholder-secret")
 
 from pydantic import ValidationError  # noqa: E402
 
-from app.schemas import CategoryCreate, CategoryRename, PersonCreate, TagCreate  # noqa: E402
+from app.schemas import (  # noqa: E402
+    CategoryCreate,
+    CategoryRename,
+    PersonCreate,
+    TagCreate,
+)
 
 
 # ── Finding 8.1: length caps via Pydantic schema ──────────────────────────────
@@ -79,7 +84,9 @@ def _read_router(name: str) -> str:
 def test_category_create_uses_casefold():
     src = _read_router("categories")
     assert ".casefold()" in src, "categories router must use .casefold() not .lower()"
-    assert ".lower()" not in src, "categories router must not use .lower() (use .casefold())"
+    assert (
+        ".lower()" not in src
+    ), "categories router must not use .lower() (use .casefold())"
 
 
 def test_category_rename_uses_casefold():

@@ -35,7 +35,8 @@ def test_preview_returns_all_skipped_rows(parsed_regalia):
     """Every skipped row must have a corresponding entry in skipped_rows."""
     result = parsed_regalia
     assert len(result.skipped_rows) == result.skipped, (
-        f"skipped={result.skipped} but skipped_rows has {len(result.skipped_rows)} entries"
+        f"skipped={result.skipped} but "
+        f"skipped_rows has {len(result.skipped_rows)} entries"
     )
 
 
@@ -46,9 +47,9 @@ def test_no_description_ends_with_ref_hash(parsed_regalia):
     """Incomplete trailing parens must be stripped by clean_description."""
     for row in parsed_regalia.rows:
         desc = clean_description(row.description)
-        assert not desc.rstrip().endswith("(Ref#"), (
-            f"Truncated description still present: {desc!r}"
-        )
+        assert not desc.rstrip().endswith(
+            "(Ref#"
+        ), f"Truncated description still present: {desc!r}"
 
 
 # ── Finding 2.6: preview and import descriptions must be identical ────────────
@@ -60,7 +61,8 @@ def test_preview_import_description_parity(parsed_regalia):
         once = clean_description(row.description)
         twice = clean_description(once)
         assert once == twice, (
-            f"clean_description not idempotent: {row.description!r} → {once!r} → {twice!r}"
+            "clean_description not idempotent: "
+            f"{row.description!r} → {once!r} → {twice!r}"
         )
 
 

@@ -60,6 +60,13 @@ omit = [
     "app/services/__init__.py",
 ]
 
+# ─── bandit ───────────────────────────────────────────────────────────────────
+[tool.bandit]
+exclude_dirs = ["tests", "alembic/versions", "venv", ".venv"]
+# B101: assert_used — common and intentional in tests; we exclude tests entirely
+#   so the rule does not fire, but kept here for documentation.
+skips = ["B101"]
+
 [tool.coverage.report]
 exclude_also = [
     "raise NotImplementedError",

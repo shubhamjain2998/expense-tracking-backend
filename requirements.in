@@ -10,6 +10,11 @@ uvicorn[standard]==0.32.1
 
 # ORM + database driver + migrations
 sqlalchemy==2.0.36
+# greenlet is an optional SQLAlchemy dep that pip resolves DIFFERENTLY on
+# macOS vs Linux. Pin it explicitly so the lockfile carries it on every
+# platform — without this, CI on linux-py3.11 fails with
+# "greenlet!=0.4.17 ... requirements must have their versions pinned with ==".
+greenlet>=3.0
 psycopg2-binary==2.9.9
 alembic==1.14.0
 

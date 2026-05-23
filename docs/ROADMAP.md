@@ -14,8 +14,8 @@ Repo hardening (this pass):
 
 - **PR 1** — README rewrite + `docs/` tree + repo-health metadata + `.github/` templates. ✅ Shipped.
 - **PR 2** — Backfill historical tags (`v0.1.0` → `v0.9.0`) with GitHub Releases; complete `CHANGELOG.md`. ✅ Shipped.
-- **PR 3** *(this PR)* — `pyproject.toml`, pip-tools lockfile (`requirements.in` → hash-pinned `requirements.txt`), `pytest-cov` with `fail_under=40` (long-term target 70+).
-- **PR 4** — GitHub Actions CI (Python 3.11 + 3.12 matrix, Postgres service container, `flake8` + `black --check` + `pytest --cov`); `pip-audit` and `bandit` in CI and pre-commit.
+- **PR 3** — `pyproject.toml`, pip-tools lockfile (`requirements.in` → hash-pinned `requirements.txt`), `pytest-cov` with `fail_under=40` (long-term target 70+). ✅ Shipped.
+- **PR 4** *(this PR)* — GitHub Actions CI (Python 3.11 + 3.12 matrix, `black --check` + `flake8` + `pytest --cov` + bandit, pip-audit non-blocking).
 - **PR 5** — `commitizen` for conventional-commit enforcement and version bumping.
 
 ## Planned
@@ -24,6 +24,7 @@ Repo hardening (this pass):
 - Branch protection on `main` (require CI pass + 1 review).
 - A scheduled Render health check that wakes the free-tier service and reports its cold-start latency.
 - Structured JSON logging in production with request IDs threaded through.
+- **Address `pip-audit` findings** — 17 known vulnerabilities across `cryptography`, `starlette`, `pillow`, `pdfminer-six`, `python-dotenv`, `python-multipart`. CI runs `pip-audit` as non-blocking until a dedicated dependency-upgrade PR resolves the unsafe ones (several require major-version bumps with breaking changes — needs care).
 
 ### Developer experience
 - `release-please` (or `commitizen` automation) to open a release PR on every merge to `main`, so cutting a release becomes a single click.

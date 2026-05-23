@@ -17,7 +17,7 @@ from decimal import Decimal  # noqa: E402
 from app.routers.transactions import classify_txn_type  # noqa: E402
 
 
-# ── Finding 3.1 + 3.2: classify_txn_type heuristics ────────────────────────────────────────────
+# ── Finding 3.1 + 3.2: classify_txn_type heuristics ──────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -43,7 +43,8 @@ from app.routers.transactions import classify_txn_type  # noqa: E402
 def test_classify_txn_type(description, amount, expected):
     result = classify_txn_type(description, amount)
     assert result == expected, (
-        f"classify_txn_type({description!r}, {amount}) → {result!r}, expected {expected!r}"
+        f"classify_txn_type({description!r}, {amount}) → "
+        f"{result!r}, expected {expected!r}"
     )
 
 
@@ -60,7 +61,7 @@ def test_credit_card_payment_is_transfer():
     )
 
 
-# ── Finding 3.4: include_deleted query param ─────────────────────────────────────────────
+# ── Finding 3.4: include_deleted query param ─────────────────────────────────
 
 
 def test_get_raw_transactions_signature_has_include_deleted():
@@ -70,9 +71,9 @@ def test_get_raw_transactions_signature_has_include_deleted():
     from app.routers.transactions import get_raw_transactions
 
     sig = inspect.signature(get_raw_transactions)
-    assert "include_deleted" in sig.parameters, (
-        "get_raw_transactions must accept an include_deleted parameter"
-    )
+    assert (
+        "include_deleted" in sig.parameters
+    ), "get_raw_transactions must accept an include_deleted parameter"
 
 
 def test_include_deleted_default_is_false():
@@ -83,6 +84,6 @@ def test_include_deleted_default_is_false():
 
     sig = inspect.signature(get_raw_transactions)
     param = sig.parameters["include_deleted"]
-    # FastAPI Query wraps the default; check that the annotation or default resolves to False
+    # FastAPI Query wraps the default; verify the annotation/default resolves to False
     # For simple default check we inspect the parameter default value wrapper
     assert param.default is not inspect.Parameter.empty

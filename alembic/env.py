@@ -1,6 +1,10 @@
-import os
 from logging.config import fileConfig
-from sqlalchemy import engine_from_config, pool
+
+from sqlalchemy import (
+    engine_from_config,
+    pool,
+)  # noqa: F401  (pool is re-exported elsewhere)
+
 from alembic import context
 
 # Load models so Alembic can detect them
