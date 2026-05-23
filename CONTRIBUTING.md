@@ -116,6 +116,18 @@ pip-compile --generate-hashes --strip-extras --allow-unsafe --upgrade requiremen
 
 Render's build command runs plain `pip install -r requirements.txt` — no pip-tools required in production.
 
+### Generating lockfiles on the right platform
+
+`pip-compile` only sees the constraints visible to the Python interpreter it runs under. Running it on macOS Python 3.9 silently misses transitive deps that are Py3.10+-only on Linux (e.g. `filelock>=3.24.2` required by recent `virtualenv`, or `greenlet` pulled in by SQLAlchemy on Linux). The resulting lockfile then fails `--require-hashes` install on CI.
+
+If your local Python is < 3.11, **do not regenerate the lockfile locally** — trigger the GitHub Actions workflow instead:
+
+```bash
+gh workflow run "Update lockfiles"   # runs pip-compile on Linux Py3.11 and opens a PR
+```
+
+The workflow lives at [`.github/workflows/lockfile.yml`](.github/workflows/lockfile.yml).
+
 ## Code style
 
 - Code is formatted by **black** (config in `pyproject.toml`) and linted by **flake8** (config in `.pre-commit-config.yaml`).
