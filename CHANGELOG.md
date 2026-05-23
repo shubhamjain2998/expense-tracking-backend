@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pyproject.toml` — project metadata, black config, pytest config (moved from `pytest.ini`), and `[tool.coverage]` config.
 - `requirements.in` + `requirements-dev.in` for [pip-tools](https://github.com/jazzband/pip-tools); compiled to hash-locked `requirements.txt` + `requirements-dev.txt`.
 - `pytest-cov` — coverage measurement on `app/` with `fail_under = 40` enforced (long-term target 70+).
+- `.github/workflows/ci.yml` — GitHub Actions CI on `push` to `main` and every PR. Matrix runs against Python 3.11 + 3.12: `black --check` → `flake8` → `pytest --cov` → coverage HTML artifact → `bandit -r app`. `pip-audit -r requirements.txt --strict` runs non-blocking (pre-existing vulnerabilities to be addressed in a follow-up dependency-upgrade PR).
+- `.flake8` — moved flake8 config out of `.pre-commit-config.yaml` so CI and pre-commit share one source of truth.
+- `[tool.bandit]` block in `pyproject.toml`; new `bandit` hook in `.pre-commit-config.yaml`.
+- CI status badge in `README.md`.
+
+### Fixed
+- `tests/test_auth_cookie.py` — 6 tests were failing on `main` because their `"pw"` / `"hunter2"` passwords pre-dated the `v1.0.0` `min_length=8` rule. Bumped to 8+ char passwords so the full suite passes.
 
 ### Changed
 - `README.md` rewritten as a landing page with badges, quick-start, repository tour, and a documentation index. Links across to the companion frontend repository.

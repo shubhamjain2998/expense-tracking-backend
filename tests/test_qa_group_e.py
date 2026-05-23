@@ -42,9 +42,9 @@ def test_7_1_calendar_to_period_month_april_is_1():
     """
     from app.services.period import calendar_to_period_month
 
-    assert calendar_to_period_month(2026, 4, "fy") == 1, (
-        "Sanity check: April maps to FY-index 1 (the old bug value)."
-    )
+    assert (
+        calendar_to_period_month(2026, 4, "fy") == 1
+    ), "Sanity check: April maps to FY-index 1 (the old bug value)."
 
 
 def test_7_1_monthly_trend_uses_row_month():
@@ -54,9 +54,9 @@ def test_7_1_monthly_trend_uses_row_month():
     from app.routers.dashboard import monthly_trend
 
     src = inspect.getsource(monthly_trend)
-    assert "row.month" in src, (
-        "monthly_trend must reference row.month to return calendar month unchanged."
-    )
+    assert (
+        "row.month" in src
+    ), "monthly_trend must reference row.month to return calendar month unchanged."
 
 
 # ── Finding 1.3: multi-month-summary batch endpoint ─────────────────────────────
@@ -67,9 +67,9 @@ def test_1_3_multi_month_summary_route_registered():
     from app.main import app as fastapi_app
 
     routes = {r.path for r in fastapi_app.routes}
-    assert "/dashboard/multi-month-summary" in routes, (
-        f"Route not found. Registered routes: {sorted(routes)}"
-    )
+    assert (
+        "/dashboard/multi-month-summary" in routes
+    ), f"Route not found. Registered routes: {sorted(routes)}"
 
 
 def test_1_3_multi_month_summary_signature():
@@ -88,15 +88,21 @@ def test_1_3_multi_month_summary_signature():
     "end_year,end_month,n,expected",
     [
         (
-            2026, 4, 6,
+            2026,
+            4,
+            6,
             [(2025, 11), (2025, 12), (2026, 1), (2026, 2), (2026, 3), (2026, 4)],
         ),
         (
-            2026, 1, 3,
+            2026,
+            1,
+            3,
             [(2025, 11), (2025, 12), (2026, 1)],
         ),
         (
-            2026, 5, 1,
+            2026,
+            5,
+            1,
             [(2026, 5)],
         ),
     ],
