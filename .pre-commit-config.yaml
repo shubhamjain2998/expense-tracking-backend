@@ -18,3 +18,13 @@ repos:
         args: ["-c", "pyproject.toml", "-r", "app"]
         additional_dependencies: ["bandit[toml]"]
         pass_filenames: false
+
+  # Validates the commit message format (run on `git commit`, not on file
+  # changes). Devs must `pre-commit install --hook-type commit-msg` once
+  # locally for this to fire — `pre-commit install` alone only installs
+  # the pre-commit hook, not the commit-msg hook.
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.7.0
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
