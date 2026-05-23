@@ -22,7 +22,9 @@ tests/
 ## Running tests
 
 ```bash
-pytest                              # full suite
+pytest                              # full suite (no coverage)
+pytest --cov=app                    # with coverage; enforces threshold from pyproject.toml
+pytest --cov=app --cov-report=html  # also writes htmlcov/ for browsing
 pytest tests/test_upload_pipeline.py   # single file
 pytest -k "auto_categorise"         # tests matching a name
 pytest -x                           # stop on first failure
@@ -64,7 +66,20 @@ def test_create_category_conflict(client, authenticated_user):
 
 ## Coverage
 
-A coverage threshold and HTML report are on the [roadmap](ROADMAP.md) (PR 3 of the repo-hardening pass). Until then, aim for at least one test per new endpoint and one per non-trivial helper.
+Coverage is measured with [`pytest-cov`](https://pytest-cov.readthedocs.io/), configured under `[tool.coverage.*]` in `pyproject.toml`:
+
+- **Scope** — `source = ["app"]`; the test suite itself and the `__init__.py` package markers are excluded.
+- **Branch coverage** is on — both legs of every `if` are counted.
+- **Threshold** — `fail_under = 40` today. The long-term target is 70+. Bump the threshold up whenever new tests raise the floor; **never lower it**.
+
+`pytest --cov=app --cov-report=term` prints a per-file table with the lines that are not covered.
+
+For a clickable HTML report:
+
+```bash
+pytest --cov=app --cov-report=html
+open htmlcov/index.html
+```
 
 ## Continuous integration
 

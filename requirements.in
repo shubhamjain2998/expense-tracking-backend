@@ -1,0 +1,36 @@
+# Production dependencies — direct (top-level) imports only.
+# Compile to a fully-pinned, hash-locked requirements.txt with:
+#     pip-compile --generate-hashes requirements.in -o requirements.txt
+# Render's build command runs `pip install -r requirements.txt`, so the
+# compiled file is what is shipped.
+
+# Web framework + ASGI server
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# ORM + database driver + migrations
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.9
+alembic==1.14.0
+
+# Statement parsing + analytics helpers
+pdfplumber==0.11.4
+pandas==2.2.3
+rapidfuzz==3.10.1
+
+# Validation + settings
+pydantic==2.10.3
+pydantic[email]==2.10.3
+email-validator==2.3.0
+pydantic-settings==2.7.0
+
+# Auth + crypto
+PyJWT==2.12.1
+cryptography==44.0.3
+bcrypt==4.2.1
+
+# Form parsing for multipart/form-data uploads
+python-multipart==0.0.18
+
+# .env loading in local dev
+python-dotenv==1.0.1

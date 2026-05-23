@@ -13,10 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/` tree: `ARCHITECTURE.md`, `API.md`, `DATABASE.md` (with Mermaid ERD), `DEPLOYMENT.md`, `DEVELOPMENT.md`, `TESTING.md`, `ROADMAP.md`, `FAQ.md`, `GLOSSARY.md`, `examples/api.http`.
 - Module-level docstrings on the FastAPI entry point and the router / service packages.
 - Backfilled annotated tags `v0.1.0` → `v0.9.0` with matching GitHub Releases for the historical milestones that pre-dated `v1.0.0`.
+- `pyproject.toml` — project metadata, black config, pytest config (moved from `pytest.ini`), and `[tool.coverage]` config.
+- `requirements.in` + `requirements-dev.in` for [pip-tools](https://github.com/jazzband/pip-tools); compiled to hash-locked `requirements.txt` + `requirements-dev.txt`.
+- `pytest-cov` — coverage measurement on `app/` with `fail_under = 40` enforced (long-term target 70+).
 
 ### Changed
 - `README.md` rewritten as a landing page with badges, quick-start, repository tour, and a documentation index. Links across to the companion frontend repository.
 - `v1.0.0` tag moved to the actual production-ready commit (cookie auth + validation hardening). The previous placeholder pointed at an early "docs: update readme" commit with no release notes.
+- Dependency installation: contributors now run `pip-sync requirements-dev.txt`. `requirements.txt` is **generated** (`linguist-generated=true`); do not edit by hand. Render's build path stays `pip install -r requirements.txt`.
+
+### Removed
+- `pytest.ini` — config moved to `[tool.pytest.ini_options]` in `pyproject.toml`.
 
 ## [1.0.0] — 2026-05-22
 

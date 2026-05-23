@@ -13,8 +13,8 @@ The current latest is **`v1.0.0`**. Tags `v0.1.0` → `v0.9.0` cover the histori
 Repo hardening (this pass):
 
 - **PR 1** — README rewrite + `docs/` tree + repo-health metadata + `.github/` templates. ✅ Shipped.
-- **PR 2** *(this PR)* — Backfill historical tags (`v0.1.0` → `v0.9.0`) with GitHub Releases; complete `CHANGELOG.md`.
-- **PR 3** — `pyproject.toml`, pip-tools lockfile (`requirements.in` → hash-pinned `requirements.txt`), `pytest-cov` with a 70% coverage threshold.
+- **PR 2** — Backfill historical tags (`v0.1.0` → `v0.9.0`) with GitHub Releases; complete `CHANGELOG.md`. ✅ Shipped.
+- **PR 3** *(this PR)* — `pyproject.toml`, pip-tools lockfile (`requirements.in` → hash-pinned `requirements.txt`), `pytest-cov` with `fail_under=40` (long-term target 70+).
 - **PR 4** — GitHub Actions CI (Python 3.11 + 3.12 matrix, Postgres service container, `flake8` + `black --check` + `pytest --cov`); `pip-audit` and `bandit` in CI and pre-commit.
 - **PR 5** — `commitizen` for conventional-commit enforcement and version bumping.
 

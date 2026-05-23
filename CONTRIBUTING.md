@@ -14,8 +14,9 @@ python -m venv venv
 source venv/bin/activate         # macOS / Linux
 # .\venv\Scripts\activate         # Windows PowerShell
 
-# 3. Install dependencies
-pip install -r requirements.txt
+# 3. Install dependencies (production + dev tooling)
+pip install -r requirements-dev.txt
+# (requirements-dev.txt pulls in requirements.txt transitively)
 
 # 4. Configure environment
 cp .env.example .env
@@ -83,9 +84,41 @@ Before opening a pull request:
 
 CI runs the same checks on every PR — see [`.github/workflows/`](.github/workflows/).
 
+## Dependency management
+
+Dependencies are managed with [pip-tools](https://github.com/jazzband/pip-tools):
+
+| File | Role |
+|---|---|
+| `requirements.in` | Hand-edited list of direct production dependencies. |
+| `requirements-dev.in` | Hand-edited list of direct dev-only dependencies (test, lint, lockfile tooling). Inherits from `requirements.txt`. |
+| `requirements.txt` | **Generated.** Fully pinned, hash-locked production lockfile. Render reads this. |
+| `requirements-dev.txt` | **Generated.** Fully pinned, hash-locked dev lockfile. Contributors and CI read this. |
+
+To **add** or **update** a dependency:
+
+```bash
+# 1. Edit requirements.in or requirements-dev.in by hand.
+# 2. Recompile both lockfiles:
+pip-compile --generate-hashes --strip-extras requirements.in -o requirements.txt
+pip-compile --generate-hashes --strip-extras --allow-unsafe requirements-dev.in -o requirements-dev.txt
+# 3. Sync your local env to the new lockfile:
+pip-sync requirements-dev.txt
+# 4. Commit both .in and .txt files together.
+```
+
+To **upgrade everything** to the latest versions allowed by `.in`:
+
+```bash
+pip-compile --generate-hashes --strip-extras --upgrade requirements.in -o requirements.txt
+pip-compile --generate-hashes --strip-extras --allow-unsafe --upgrade requirements-dev.in -o requirements-dev.txt
+```
+
+Render's build command runs plain `pip install -r requirements.txt` — no pip-tools required in production.
+
 ## Code style
 
-- Code is formatted by **black** and linted by **flake8** (88-character line length).
+- Code is formatted by **black** (config in `pyproject.toml`) and linted by **flake8** (config in `.pre-commit-config.yaml`).
 - Both run automatically via pre-commit on staged files; configure your editor to run them on save for the best experience.
 - Comments only when the **why** is non-obvious: a hidden constraint, a subtle invariant, or a workaround for a specific external bug.
 - Do not add comments that reference the current task, PR, or issue number — those belong in the PR description and rot as the code evolves.
@@ -97,7 +130,8 @@ See [`docs/TESTING.md`](docs/TESTING.md) for the full testing guide. Quick refer
 
 | Command | Purpose |
 |---|---|
-| `pytest` | Run the full suite. |
+| `pytest` | Run the full suite (no coverage). |
+| `pytest --cov=app` | Run with coverage; uses the threshold in `pyproject.toml`. |
 | `pytest tests/test_upload_pipeline.py` | Run a single file. |
 | `pytest -k "auto_categorise"` | Run tests matching a name. |
 | `pytest -x` | Stop on first failure. |

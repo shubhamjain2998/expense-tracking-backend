@@ -11,3 +11,5 @@
 
 # Generated / vendored files — collapse in PR diffs by default
 alembic/versions/*.py linguist-generated=false
+requirements.txt linguist-generated=true
+requirements-dev.txt linguist-generated=true

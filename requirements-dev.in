@@ -1,0 +1,23 @@
+# Development dependencies — only installed by contributors and CI.
+# Compile to a fully-pinned, hash-locked requirements-dev.txt with:
+#     pip-compile --generate-hashes requirements-dev.in -o requirements-dev.txt
+#
+# `pip-sync requirements-dev.txt` will then install everything from both
+# the prod and dev lockfiles (since this file references requirements.txt).
+
+# Pull in the locked production deps too, so a dev environment is a superset.
+-r requirements.txt
+
+# Lockfile tooling
+pip-tools>=7.5
+
+# Formatter + linter (mirror the .pre-commit-config.yaml versions)
+black==25.11.0
+flake8==7.3.0
+
+# Test framework + coverage
+pytest>=8
+pytest-cov>=5
+
+# Pre-commit harness
+pre-commit>=4
