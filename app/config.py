@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     cookie_samesite: str = "strict"
 
+    # Google OAuth Web client ID — set to enable "Sign in with Google".
+    # Empty string disables the endpoint (and the button on the frontend).
+    google_client_id: str = ""
+
     model_config = {"env_file": ".env"}
 
 

@@ -15,4 +15,5 @@ pydantic-settings==2.7.0
 PyJWT==2.12.1
 cryptography==44.0.3
 bcrypt==4.2.1
+google-auth==2.35.0
 pytest>=8

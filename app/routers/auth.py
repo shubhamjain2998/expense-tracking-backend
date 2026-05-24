@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -41,6 +43,11 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=128)
+
+
+class GoogleLoginRequest(BaseModel):
+    # The ID token (JWT) returned by Google Identity Services on the frontend.
+    credential: str = Field(min_length=1)
 
 
 class TokenResponse(BaseModel):
@@ -105,6 +112,69 @@ def login(body: LoginRequest, response: Response, db: Session = Depends(get_db))
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
+
+    token = _make_token(str(user.id))
+    _set_auth_cookie(response, token)
+    return TokenResponse(access_token=token)
+
+
+@router.post("/google", response_model=TokenResponse)
+def google_login(
+    body: GoogleLoginRequest, response: Response, db: Session = Depends(get_db)
+):
+    """Sign in (or sign up) with a Google ID token.
+
+    Verifies the token against Google's public keys, then:
+      1. If a user with the same ``google_sub`` exists, log them in.
+      2. Else if a user with the same email exists, link Google to that
+         account (set ``google_sub``) and log them in.
+      3. Else create a new user with ``password_hash=None`` and log them in.
+    """
+    if not settings.google_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google sign-in is not configured",
+        )
+
+    try:
+        claims = google_id_token.verify_oauth2_token(
+            body.credential,
+            google_requests.Request(),
+            settings.google_client_id,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Google credential",
+        )
+
+    google_sub = claims.get("sub")
+    email = claims.get("email")
+    email_verified = claims.get("email_verified", False)
+    if not google_sub or not email:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Google credential missing required claims",
+        )
+    if not email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Google email is not verified",
+        )
+
+    email = email.lower()
+    user = db.execute(
+        select(User).where(User.google_sub == google_sub)
+    ).scalar_one_or_none()
+    if user is None:
+        user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        if user is not None:
+            user.google_sub = google_sub
+        else:
+            user = User(email=email, password_hash=None, google_sub=google_sub)
+            db.add(user)
+        db.commit()
+        db.refresh(user)
 
     token = _make_token(str(user.id))
     _set_auth_cookie(response, token)

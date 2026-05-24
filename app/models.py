@@ -57,7 +57,13 @@ class User(TimestampMixin, Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
-    password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    # Nullable: OAuth-only users (signed up via Google) have no local password.
+    password_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Google `sub` claim — stable per-user identifier from Google Identity
+    # Services. Populated on Google sign-in; null for password-only users.
+    google_sub: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True, unique=True
+    )
 
 
 # ─── Category ─────────────────────────────────────────────────────────────────────
