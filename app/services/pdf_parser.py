@@ -1,7 +1,7 @@
 """
 PDF bank-statement parser.
 
-Supports three table layouts:
+Supports four table layouts:
   1. Single-column  — HDFC credit-card style where every row is one merged text cell:
        DD/MM/YYYY| HH:MM  MERCHANT [+ N C]  C AMOUNT.XX [l]
   2. Multi-column   — separate date / description / debit / credit / amount columns,
@@ -10,15 +10,27 @@ Supports three table layouts:
        transactions in a page into a single row, with newline-separated values per
        cell (common in HDFC savings-account statements).  These rows are expanded
        into individual rows before parsing.
+  4. Header-split   — ICICI credit-card style where each transaction is its own
+       single-row table that follows a header-only table; the column map from
+       the header table is reused for subsequent data tables on the same page or
+       on continuation pages.
+
+Format-specific quirks handled:
+  - ICICI credit card: "Intl.# amount" header column ignored; rightmost "Amount"
+    column wins; "CR" suffix → credit; EMI/Loan summary tables are skipped.
+  - Paytm passbook: dates lack a year ("29 Apr 10:58 PM") — the year is inferred
+    from the statement period header (e.g. "1 APR'26 - 30 APR'26"). Amounts use
+    explicit "+ Rs." / "- Rs." prefixes with inverted sign convention vs. accounting
+    (+ = received = credit, - = paid = debit).
 
 Public API used by the router and the playground notebook:
   parse_bank_statement(pdf_bytes) -> ParseResult
-  parse_date(s)                   -> Optional[date]
-  parse_amount(s)                 -> Optional[float]
-  _find_header_row(table)         -> (header_idx, ColumnMap | None)
+  parse_date(s, fallback_year=None) -> Optional[date]
+  parse_amount(s)                   -> Optional[float]
+  _find_header_row(table)           -> (header_idx, ColumnMap | None)
   _detect_columns_by_heuristic(table) -> ColumnMap | None
-  _is_transaction_table(table)    -> bool
-  _parse_table(table, fallback_col_map) -> (rows, skipped_count, col_map)
+  _is_transaction_table(table)      -> bool
+  _parse_table(table, fallback_col_map, fallback_year) -> (rows, skipped_count, col_map)
   ColumnMap, ParsedRow, ParseResult
 """
 
@@ -85,9 +97,21 @@ _DATE_SEARCH_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "DD MMM" with no year — used when a statement-level fallback year is available
+# (e.g. Paytm passbooks: "29 Apr", "1 Apr").
+_DAY_MONTH_RE = re.compile(
+    r"\b(\d{1,2})\s+" r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b",
+    re.IGNORECASE,
+)
 
-def parse_date(s: str) -> Optional[date]:
-    """Parse a date string into a Python date.  Returns None on failure."""
+
+def parse_date(s: str, fallback_year: Optional[int] = None) -> Optional[date]:
+    """Parse a date string into a Python date.  Returns None on failure.
+
+    If *fallback_year* is provided and the string contains a "DD MMM" pattern
+    with no year (e.g. Paytm "29 Apr"), the fallback year is used to complete
+    the date.
+    """
     if not s:
         return None
     s = s.strip()
@@ -99,7 +123,21 @@ def parse_date(s: str) -> Optional[date]:
     # Try extracting a date-like sub-string and retry
     m = _DATE_SEARCH_RE.search(s)
     if m and m.group(0) != s:
-        return parse_date(m.group(0))
+        result = parse_date(m.group(0), fallback_year=fallback_year)
+        if result is not None:
+            return result
+    # Year-less "DD MMM" → combine with the statement period's year
+    if fallback_year is not None:
+        m = _DAY_MONTH_RE.search(s)
+        if m:
+            day = int(m.group(1))
+            mon = m.group(2).title()[:3]
+            try:
+                return datetime.strptime(
+                    f"{day:02d} {mon} {fallback_year}", "%d %b %Y"
+                ).date()
+            except ValueError:
+                return None
     return None
 
 
@@ -110,6 +148,11 @@ _CREDIT_SUFFIX_RE = re.compile(r"\s*(CR|Cr)\b")
 _DEBIT_SUFFIX_RE = re.compile(r"\s*(DR|Dr)\b")
 _BARE_NUMBER_RE = re.compile(r"[\d,]+\.?\d*")
 
+# Paytm-style explicit sign: "+ Rs.25,000" (received → credit) or "- Rs.183"
+# (paid → debit).  This is the inverse of the default "leading - = credit"
+# convention, so it must be detected before the generic logic runs.
+_PAYTM_SIGN_RE = re.compile(r"^\s*([+\-])\s*(?:Rs\.?|₹)", re.IGNORECASE)
+
 
 def parse_amount(s: str) -> Optional[float]:
     """
@@ -117,12 +160,29 @@ def parse_amount(s: str) -> Optional[float]:
     Positive = debit/expense, negative = credit/income.
 
     Handles: 1,234.56 / 1,234.56 DR / 1,234.56 CR / (500.00) / 50000CR / -
+             + Rs.25,000 (Paytm credit) / - Rs.183 (Paytm debit)
     """
     if not s:
         return None
     s = s.strip()
     if s in ("-", "", "N/A", "Nil"):
         return None
+
+    # Paytm explicit-sign convention (must run before the generic leading-`-`
+    # branch, which would otherwise misclassify "- Rs.X" as a credit).
+    m = _PAYTM_SIGN_RE.match(s)
+    if m:
+        sign = m.group(1)
+        tail = s[m.end() :]  # noqa: E203
+        rest = re.sub(r"[₹$€£,\s]|Rs\.?", "", tail, flags=re.IGNORECASE)
+        num_m = _BARE_NUMBER_RE.search(rest)
+        if not num_m:
+            return None
+        try:
+            val = float(num_m.group(0).replace(",", ""))
+        except ValueError:
+            return None
+        return -val if sign == "+" else val
 
     is_credit = False
 
@@ -174,9 +234,60 @@ _HDR = {
     "amount": re.compile(r"\b(amount|amt)\b", re.IGNORECASE),
 }
 
+# Foreign-currency / international amount columns that look like "Amount" but
+# aren't the primary INR amount (e.g. ICICI's "Intl.# amount" column, which is
+# blank for domestic transactions).
+_FOREIGN_AMOUNT_RE = re.compile(
+    r"intl\.?|international|foreign|\bfx\b|\bfcy?\b|conv(ersion)?\s*rate",
+    re.IGNORECASE,
+)
+
 _DATE_VALUE_RE = re.compile(r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b")
+# Loose date detection used for "is this a continuation page" heuristics.
+# Also accepts "DD MMM" with no year (Paytm passbook).
+_DATE_LOOSE_RE = re.compile(
+    r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b"
+    r"|\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b",
+    re.IGNORECASE,
+)
 _AMOUNT_VALUE_RE = re.compile(r"^\s*[\d,]+\.\d{2}\s*$")
 _AMOUNT_SEARCH_RE = re.compile(r"\b[\d,]+\.\d{2}\b")
+# Looser amount hint: matches "Rs.183" / "₹25,000" / "183.00" — used only to
+# confirm continuation pages have transaction-shaped data on them.
+_AMOUNT_HINT_RE = re.compile(
+    r"(?:Rs\.?\s*[\d,]+|₹\s*[\d,]+|\b[\d,]+\.\d{2}\b)", re.IGNORECASE
+)
+
+# Headers that identify an EMI / loan summary table (not a transaction list).
+# Must apply only to short header *cells* — narration cells routinely contain
+# the word "installment" in transaction descriptions and would false-positive.
+_EMI_LOAN_CELL_RE = re.compile(
+    r"\binstallments?\b|monthly\s+installment|\bloan\s*type\b|"
+    r"outstanding\s+inst|\bEMI(?:/Loan)?\s*amount\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_emi_summary(table: List[List[str]]) -> bool:
+    """Return True if the table is a loan / EMI installment summary.
+
+    Heuristic: at least two distinct header *cells* in the first few rows must
+    match an EMI/loan marker, and each must look like a header cell (short, no
+    multi-line data).  This avoids false positives on transaction narrations
+    that mention "EMI" or "INSTALLMENT".
+    """
+    matches = 0
+    for row in table[:3]:
+        for cell in row:
+            cell = (cell or "").strip()
+            if not cell or len(cell) > 60 or "\n" in cell[: len(cell) - 1]:
+                # Skip long narrations or multi-value merged cells.
+                pass
+            if cell and len(cell) <= 60 and _EMI_LOAN_CELL_RE.search(cell):
+                matches += 1
+                if matches >= 2:
+                    return True
+    return False
 
 
 def _find_header_row(
@@ -208,7 +319,11 @@ def _find_header_row(
                 debit_col = col_idx
             if _HDR["credit"].search(cell) and credit_col is None:
                 credit_col = col_idx
-            if _HDR["amount"].search(cell) and amount_col is None:
+            # Amount: take the RIGHTMOST match, skipping any foreign-currency
+            # "amount" columns (e.g. ICICI's "Intl.# amount", always blank for
+            # domestic transactions).  Statements consistently place the
+            # primary amount column rightmost.
+            if _HDR["amount"].search(cell) and not _FOREIGN_AMOUNT_RE.search(cell):
                 amount_col = col_idx
 
         return row_idx, ColumnMap(
@@ -370,7 +485,11 @@ def _parse_single_column_row(cell_text: str) -> Optional[ParsedRow]:
 # ─── Multi-column row parser ───────────────────────────────────────────────────
 
 
-def _parse_multi_column_row(row: List[str], col_map: ColumnMap) -> Optional[ParsedRow]:
+def _parse_multi_column_row(
+    row: List[str],
+    col_map: ColumnMap,
+    fallback_year: Optional[int] = None,
+) -> Optional[ParsedRow]:
     """Parse one row from a standard multi-column statement table."""
 
     def get(col: Optional[int]) -> str:
@@ -378,11 +497,22 @@ def _parse_multi_column_row(row: List[str], col_map: ColumnMap) -> Optional[Pars
             return ""
         return (row[col] or "").strip()
 
-    txn_date = parse_date(get(col_map.date_col))
+    txn_date = parse_date(get(col_map.date_col), fallback_year=fallback_year)
     if txn_date is None:
         return None
 
-    desc = get(col_map.desc_col) or get(col_map.date_col)
+    desc = get(col_map.desc_col)
+    if not desc:
+        # Some tables share one column for date and description; fall back to
+        # the date column ONLY if its content isn't itself a parseable date
+        # (otherwise we'd end up with "21/05/26" as the description text,
+        # which happens on HDFC-style merged rows where pdfplumber produces
+        # fewer narration lines than transactions).
+        candidate = get(col_map.date_col)
+        if candidate and parse_date(candidate) is None:
+            desc = candidate
+    # Multi-line cells (Paytm "Paid to X\nUPI ID: …") collapse to a single line.
+    desc = re.sub(r"\s+", " ", desc).strip()
 
     if col_map.debit_col is not None and col_map.credit_col is not None:
         debit = parse_amount(get(col_map.debit_col))
@@ -395,7 +525,9 @@ def _parse_multi_column_row(row: List[str], col_map: ColumnMap) -> Optional[Pars
             return None
     elif col_map.amount_col is not None:
         amount = parse_amount(get(col_map.amount_col))
-        if amount is None:
+        if amount is None or amount == 0:
+            # 0.00 CR rows appear in some ICICI statements as EMI shadows; they
+            # carry no real transaction and clutter the output.
             return None
     else:
         return None
@@ -591,15 +723,21 @@ def _is_transaction_table(table: List[List[str]]) -> bool:
     if not table:
         return False
 
-    header_text = " ".join(c for c in table[0] if c)
-    if _TXN_HEADER_RE.search(header_text):
+    # Header keywords can live in row 0 (usual case) or row 1 (when row 0 is a
+    # title cell like Paytm's "Passbook Payments History").  Scan up to 3 rows.
+    scan_text = " ".join(c for row in table[:3] for c in row if c)
+    if _TXN_HEADER_RE.search(scan_text):
+        # Reject EMI / loan summary tables (e.g. ICICI's "Merchant EMI
+        # conversions" block on the last page).  Their headers contain
+        # "transaction" but they list installments, not statement entries.
+        if _looks_like_emi_summary(table):
+            return False
         return True
 
-    # Continuation pages: first cell contains date-like values and the row
-    # also contains amount-like values (e.g. bank statements with no per-page
-    # header repeat).
+    # Continuation pages / header-split layouts (ICICI, Paytm): first cell
+    # contains a date and the row carries an amount marker.
     first_cell = (table[0][0] or "").strip() if table[0] else ""
-    if _DATE_VALUE_RE.search(first_cell) and _AMOUNT_SEARCH_RE.search(header_text):
+    if _DATE_LOOSE_RE.search(first_cell) and _AMOUNT_HINT_RE.search(scan_text):
         return True
 
     return False
@@ -608,6 +746,7 @@ def _is_transaction_table(table: List[List[str]]) -> bool:
 def _parse_table(
     table: List[List[str]],
     fallback_col_map: Optional[ColumnMap] = None,
+    fallback_year: Optional[int] = None,
 ) -> Tuple[List[ParsedRow], int, Optional[ColumnMap], List[str]]:
     """
     Parse a cleaned table (None cells already replaced with '') into ParsedRows.
@@ -617,6 +756,7 @@ def _parse_table(
         fallback_col_map: Column map from a previously parsed header row on an
             earlier page.  Used when this table has no header of its own
             (continuation pages in multi-page bank statements).
+        fallback_year: Year to use when row dates are year-less (Paytm passbook).
 
     Returns:
         (rows, skipped_count, col_map_used, skipped_rows)
@@ -668,7 +808,9 @@ def _parse_table(
             # Attempt to expand merged rows (multiple transactions in one row)
             expanded = _try_expand_merged_row(row, col_map)
             for exp_row in expanded:
-                parsed = _parse_multi_column_row(exp_row, col_map)
+                parsed = _parse_multi_column_row(
+                    exp_row, col_map, fallback_year=fallback_year
+                )
                 if parsed is not None:
                     rows.append(parsed)
                 else:
@@ -677,6 +819,241 @@ def _parse_table(
                     skipped_rows.append(" | ".join(parts)[:120])
 
     return rows, skipped, col_map, skipped_rows
+
+
+# ─── Generic text-line transaction extractor ──────────────────────────────────
+#
+# pdfplumber's extract_tables() only returns rows that are bounded by visible
+# cell borders.  Many real-world statements (ICICI credit card is one example;
+# others use the same pattern) draw box outlines only around highlighted rows
+# and render ordinary debit lines as plain text, so those rows never appear in
+# the table set at all.
+#
+# This module-level fallback parses each text line directly.  It is fully
+# bank-agnostic: it relies only on the universal invariant that a transaction
+# line contains a date and an amount, with a description in between.
+#
+# Disambiguation rules (kept simple on purpose):
+#   • Date  — leftmost date-shaped substring on the line.
+#   • Amount — the line must contain exactly ONE amount-shaped token.  Lines
+#              with 2+ amounts (savings-account rows with txn + closing
+#              balance) are skipped here because they're ambiguous without
+#              column context; pdfplumber's table extractor handles them well
+#              when borders are present.
+#   • Description — text between the date and the amount, with leading
+#              reference numbers and trailing reward points trimmed.
+
+# Date patterns the line parser will recognise, including year-less "DD MMM"
+# (paired with a statement-level fallback year for passbook-style PDFs).
+_LINE_DATE_RE = re.compile(
+    r"\b("
+    r"\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}"
+    r"|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"
+    r"|\d{1,2}[-/.\s]+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+    r"[a-z]*(?:[-/.,\s]+\d{2,4})?"
+    r"|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# An amount token, used both to count amount candidates on a line and to
+# capture the trailing transaction amount.  Accepts:
+#   (1,234.56)            accounting parens
+#   1,234.56 / 1234.56    decimal
+#   1,234.56 CR | DR      decimal + suffix
+#   Rs.1,234 / ₹500       currency with optional decimal
+#   + Rs.500 / - Rs.500   currency with explicit sign (Paytm-style)
+#   500 CR | DR           integer with suffix
+# The leading-sign branches use look-behind to ensure we don't split a
+# negative reward-points integer ("-44") off the preceding token.
+_AMOUNT_TOKEN_RE = re.compile(
+    r"\([\d,]+(?:\.\d{1,2})?\)"
+    r"|(?<![\w])[+\-]\s*(?:Rs\.?|₹|INR)\s*[\d,]+(?:\.\d{1,2})?"
+    r"|(?:Rs\.?|₹|INR)\s*[\d,]+(?:\.\d{1,2})?"
+    r"|(?<![\d.,])[+\-]?\s*[\d,]+\.\d{2}\b"
+    r"|(?<![\d.,])[+\-]?\s*[\d,]+(?=\s*(?:CR|DR|Cr|Dr)\b)",
+)
+
+# Suffix that may follow the amount token and changes the sign.
+_AMOUNT_SUFFIX_RE = re.compile(r"\s*(CR|DR|Cr|Dr)\b")
+
+
+def _parse_text_line(
+    line: str, fallback_year: Optional[int] = None
+) -> Optional[ParsedRow]:
+    """Try to parse one raw text line as a transaction.
+
+    Returns None if the line doesn't have exactly one date and exactly one
+    amount-shaped token.  Bank-agnostic: works on any line of the universal
+    form "<date> ... <description> ... <amount>[ CR|DR]".
+    """
+    line = line.strip()
+    if not line:
+        return None
+
+    # Collect all amount tokens.  >1 means the line is ambiguous (typically a
+    # savings-account row with both transaction and balance values) — defer to
+    # the table extractor for those.
+    amount_matches = list(_AMOUNT_TOKEN_RE.finditer(line))
+    if len(amount_matches) != 1:
+        return None
+    amount_m = amount_matches[0]
+
+    # Date must appear to the left of the amount.
+    date_m = _LINE_DATE_RE.search(line[: amount_m.start()])
+    if not date_m:
+        return None
+
+    d = parse_date(date_m.group(1), fallback_year=fallback_year)
+    if d is None:
+        return None
+
+    # Include any "CR"/"DR" suffix immediately following the amount value.
+    amount_end = amount_m.end()
+    suffix_m = _AMOUNT_SUFFIX_RE.match(line[amount_end:])
+    if suffix_m:
+        amount_end += suffix_m.end()
+    amount_text = line[amount_m.start() : amount_end]  # noqa: E203
+
+    amt = parse_amount(amount_text)
+    if amt is None or amt == 0:
+        return None
+
+    # Description: everything between the date and the amount.  Generic
+    # cleanups only:
+    #   • a leading run of digits ≥5 long is almost always a reference /
+    #     serial number (ICICI SerNo, HDFC ref no., UPI ref no.).
+    #   • a short trailing integer (e.g. "58", "-346") sitting just before
+    #     the amount is almost always reward points / FX delta.
+    desc = line[date_m.end() : amount_m.start()].strip(" \t|:-")  # noqa: E203
+    desc = re.sub(r"^\d{5,}\s+", "", desc)
+    desc = re.sub(r"\s+-?\d{1,4}\s*$", "", desc)
+    desc = re.sub(r"\s+", " ", desc).strip()
+    # Reject descriptions that are nothing but time stamps, sign markers,
+    # currency glyphs, or punctuation (e.g. "23:43 + C" from PDFs that render
+    # ₹ as the latin letter C).  A real merchant name has at least one short
+    # alphabetic token.
+    if not re.search(r"[A-Za-z]{3,}", desc):
+        return None
+
+    return ParsedRow(txn_date=d, description=desc, amount=amt)
+
+
+# ─── De-duplication ──────────────────────────────────────────────────────────
+#
+# Two extraction sources (pdfplumber tables + raw-text lines) can both surface
+# the same underlying transaction.  We can't dedupe on the exact tuple
+# (date, description, amount) because the description text frequently differs
+# between sources (the text-line extractor often pulls in adjacent timestamps,
+# reward-point indicators, or rendering artefacts).
+#
+# Instead: two rows are considered the same transaction iff they share
+#   • the same date,
+#   • the same magnitude (sign may disagree across sources — we trust whichever
+#     row was recorded first; table rows are always recorded before text-line
+#     rows, so the better-signed value wins),
+#   • and a long alphanumeric substring in common.
+
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _normalise_desc(s: str) -> str:
+    return _NON_ALNUM_RE.sub("", s.lower())
+
+
+def _descriptions_overlap(a: str, b: str, min_overlap: int = 12) -> bool:
+    """True if the two descriptions reference the same merchant/payment.
+
+    Uses a normalised-substring check: one description's alphanumeric form is
+    contained in the other, OR they share a contiguous window of
+    ``min_overlap`` chars.  The window threshold is intentionally generous —
+    common UPI / banking artefacts ("brk@valid", "ptyes", etc.) can appear in
+    unrelated transaction descriptions, so we require a substantial run of
+    matching characters before declaring two rows duplicates.
+    """
+    na, nb = _normalise_desc(a), _normalise_desc(b)
+    if not na or not nb:
+        return False
+    if na in nb or nb in na:
+        return True
+    short, long = (na, nb) if len(na) <= len(nb) else (nb, na)
+    if len(short) < min_overlap:
+        return False
+    for i in range(len(short) - min_overlap + 1):
+        if short[i : i + min_overlap] in long:  # noqa: E203
+            return True
+    return False
+
+
+def _calendar_date(txn_date) -> date:
+    """Return the calendar date for a ParsedRow.txn_date, which may be a
+    plain :class:`date` (multi-column tables, text-line parser) or a
+    :class:`datetime` (single-column merged tables that carry HH:MM)."""
+    return txn_date.date() if isinstance(txn_date, datetime) else txn_date
+
+
+def _dedupe_rows(rows: List[ParsedRow]) -> Tuple[List[ParsedRow], List[str]]:
+    """Drop later rows that look like duplicates of an earlier row.
+
+    Returns (kept_rows, warnings).  See _descriptions_overlap for the match
+    criterion.
+    """
+    kept: List[ParsedRow] = []
+    warnings: List[str] = []
+    for row in rows:
+        is_dup = False
+        row_day = _calendar_date(row.txn_date)
+        for existing in kept:
+            if _calendar_date(existing.txn_date) != row_day:
+                continue
+            if abs(abs(existing.amount) - abs(row.amount)) > 0.005:
+                continue
+            if _descriptions_overlap(existing.description, row.description):
+                is_dup = True
+                warnings.append(
+                    f"Duplicate skipped: {row.txn_date} | "
+                    f"{row.description[:40]} | {row.amount}"
+                )
+                break
+        if not is_dup:
+            kept.append(row)
+    return kept, warnings
+
+
+# ─── Statement-level metadata helpers ─────────────────────────────────────────
+
+# Year hints surfaced in statement-period headers.  We look for, in order:
+#   1. A 4-digit year on a "From / To / Period" line
+#      (e.g. "Statement period: 01/04/2026 to 30/04/2026")
+#   2. A short-year "APR'26" / "Apr'26" style          (Paytm passbook)
+#   3. Any standalone 20xx in the document text
+_YEAR_4DIGIT_RE = re.compile(r"\b(20\d{2})\b")
+_YEAR_SHORT_RE = re.compile(
+    r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*['’]\s*(\d{2})\b",
+    re.IGNORECASE,
+)
+
+
+def _infer_statement_year(text: str) -> Optional[int]:
+    """Best-effort guess at the year covered by year-less dates in a statement.
+
+    Returns the latest year mentioned (the end of the period if a range), so
+    that statements spanning a year-end pick the most recent year by default.
+    """
+    if not text:
+        return None
+    years: List[int] = []
+    for m in _YEAR_4DIGIT_RE.finditer(text):
+        years.append(int(m.group(1)))
+    for m in _YEAR_SHORT_RE.finditer(text):
+        years.append(2000 + int(m.group(1)))
+    if not years:
+        return None
+    # Statements often print the current year (or two consecutive years) — pick
+    # the most recent so a "29 Dec" date in a "Dec'25 → Jan'26" statement
+    # resolves to 2025 only if the user explicitly tweaks the helper; the
+    # common case (statement entirely inside one year) is unaffected.
+    return max(years)
 
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
@@ -726,12 +1103,18 @@ def parse_bank_statement(
         raise PdfPasswordRequired() from exc
 
     with pdf_ctx as pdf:
-        for page in pdf.pages:
-            tables = page.extract_tables()
-            if not tables:
-                continue
+        # Infer the statement year from the first page's text so that
+        # year-less dates (Paytm "29 Apr") can still be parsed.
+        try:
+            first_page_text = pdf.pages[0].extract_text() if pdf.pages else ""
+        except Exception:
+            first_page_text = ""
+        fallback_year = _infer_statement_year(first_page_text or "")
 
-            for raw_table in tables:
+        for page in pdf.pages:
+            # ── 1. Table-based extraction (good when cell borders are present)
+            tables = page.extract_tables()
+            for raw_table in tables or []:
                 if not raw_table:
                     continue
 
@@ -747,7 +1130,9 @@ def parse_bank_statement(
                     continue
 
                 page_rows, page_skipped, used_col_map, page_skipped_rows = _parse_table(
-                    table, fallback_col_map=last_col_map
+                    table,
+                    fallback_col_map=last_col_map,
+                    fallback_year=fallback_year,
                 )
 
                 # Persist the col_map so continuation pages can reuse it
@@ -758,20 +1143,28 @@ def parse_bank_statement(
                 result.skipped += page_skipped
                 result.skipped_rows.extend(page_skipped_rows)
 
-    # ── De-duplicate exact rows (same date + description + amount) ────────────
-    seen: set = set()
-    unique_rows: list = []
-    for row in result.rows:
-        key = (row.txn_date, row.description, row.amount)
-        if key not in seen:
-            seen.add(key)
-            unique_rows.append(row)
-        else:
-            result.skipped += 1
-            result.warnings.append(
-                f"Duplicate skipped: {row.txn_date} | "
-                f"{row.description[:40]} | {row.amount}"
-            )
+            # ── 2. Generic text-line extraction (catches rows that have no
+            #      visible cell border and so are absent from extract_tables).
+            #      Bank-agnostic: the parser only requires one date and one
+            #      unambiguous amount per line.  Overlap with the table rows
+            #      above is removed by the smart deduper below.
+            try:
+                page_text = page.extract_text() or ""
+            except Exception:
+                page_text = ""
+            for line in page_text.splitlines():
+                parsed = _parse_text_line(line, fallback_year=fallback_year)
+                if parsed is not None:
+                    result.rows.append(parsed)
 
-    result.rows = unique_rows
+    # ── 3. Smart de-duplication
+    #      A row from the text-line scan that matches a table-extracted row
+    #      (same date, same |amount|, overlapping description) is dropped in
+    #      favour of the earlier (table-extracted) row, which generally has
+    #      cleaner whitespace and the correct sign.  Duplicates are recorded
+    #      as warnings rather than counted against ``skipped`` (which the API
+    #      surfaces as "rows pdfplumber could not parse" — duplicate-removal
+    #      is a different concept).
+    result.rows, dup_warnings = _dedupe_rows(result.rows)
+    result.warnings.extend(dup_warnings)
     return result
