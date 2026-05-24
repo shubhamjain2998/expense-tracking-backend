@@ -9,7 +9,7 @@ import uuid
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -24,7 +24,11 @@ from app.schemas import (
     UploadStatementResponse,
 )
 from app.services.normalizer import clean_description
-from app.services.pdf_parser import parse_bank_statement
+from app.services.pdf_parser import (
+    PdfPasswordIncorrect,
+    PdfPasswordRequired,
+    parse_bank_statement,
+)
 from app.services.text_parser import parse_bank_statement_text
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
@@ -111,12 +115,47 @@ def _require_pdf(file: UploadFile) -> None:
         )
 
 
+def _parse_pdf_or_422(pdf_bytes: bytes, password: Optional[str]):
+    """Parse bytes through the PDF parser, mapping encryption errors to typed
+    422 responses so the client can show a password prompt instead of a
+    generic "failed to parse" toast. Password is never logged or persisted."""
+    try:
+        return parse_bank_statement(pdf_bytes, password=password)
+    except PdfPasswordRequired as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "pdf_password_required",
+                "message": (
+                    "This PDF is password-protected. Enter the password to unlock it."
+                ),
+            },
+        ) from exc
+    except PdfPasswordIncorrect as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "pdf_password_incorrect",
+                "message": "The password didn't unlock the PDF. Please try again.",
+            },
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Failed to parse PDF: {exc}",
+        ) from exc
+
+
 # ── POST /uploads/statement ───────────────────────────────────────────────────
 
 
 @router.post("/statement", response_model=UploadStatementResponse, status_code=201)
 async def upload_statement(
     file: UploadFile = File(..., description="Bank statement PDF"),
+    password: Optional[str] = Form(
+        default=None,
+        description="Password for an encrypted PDF. Held in memory only.",
+    ),
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ) -> UploadStatementResponse:
@@ -133,13 +172,7 @@ async def upload_statement(
     content_hash = _sha256(pdf_bytes)
     _check_duplicate(content_hash, user_id, db)
 
-    try:
-        result = parse_bank_statement(pdf_bytes)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Failed to parse PDF: {exc}",
-        ) from exc
+    result = _parse_pdf_or_422(pdf_bytes, password)
 
     if not result.rows:
         raise HTTPException(
@@ -185,6 +218,10 @@ async def upload_statement(
 @router.post("/preview", response_model=PreviewStatementResponse)
 async def preview_statement(
     file: UploadFile = File(..., description="Bank statement PDF"),
+    password: Optional[str] = Form(
+        default=None,
+        description="Password for an encrypted PDF. Held in memory only.",
+    ),
     user_id: uuid.UUID = Depends(get_current_user),
 ) -> PreviewStatementResponse:
     """
@@ -197,13 +234,7 @@ async def preview_statement(
     if not pdf_bytes:
         raise HTTPException(status_code=422, detail="Uploaded file is empty.")
 
-    try:
-        result = parse_bank_statement(pdf_bytes)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Failed to parse PDF: {exc}",
-        ) from exc
+    result = _parse_pdf_or_422(pdf_bytes, password)
 
     return PreviewStatementResponse(
         would_insert=len(result.rows),

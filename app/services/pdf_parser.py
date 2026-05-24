@@ -682,7 +682,17 @@ def _parse_table(
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
 
-def parse_bank_statement(pdf_bytes: bytes) -> ParseResult:
+class PdfPasswordRequired(Exception):
+    """Raised when the PDF is encrypted and no password was supplied."""
+
+
+class PdfPasswordIncorrect(Exception):
+    """Raised when the supplied password did not unlock the PDF."""
+
+
+def parse_bank_statement(
+    pdf_bytes: bytes, password: Optional[str] = None
+) -> ParseResult:
     """
     Parse a bank-statement PDF supplied as raw bytes (never touches disk).
 
@@ -690,11 +700,32 @@ def parse_bank_statement(pdf_bytes: bytes) -> ParseResult:
       rows     — list of ParsedRow (txn_date, description, amount)
       skipped  — count of rows that could not be parsed
       warnings — non-fatal notes (e.g. duplicate rows removed)
+
+    Raises:
+      PdfPasswordRequired  — PDF is encrypted but `password` is None/empty
+      PdfPasswordIncorrect — supplied password does not unlock the PDF
     """
     result = ParseResult()
     last_col_map: Optional[ColumnMap] = None
 
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+    # Late import so the rest of the parser keeps loading even if pdfminer's
+    # internal layout shifts between versions.
+    from pdfminer.pdfdocument import PDFPasswordIncorrect as _PDFPasswordIncorrect
+    from pdfminer.pdfdocument import PDFEncryptionError as _PDFEncryptionError
+
+    try:
+        pdf_ctx = pdfplumber.open(io.BytesIO(pdf_bytes), password=password or "")
+    except _PDFPasswordIncorrect as exc:
+        # An empty password against an encrypted PDF surfaces as
+        # PDFPasswordIncorrect under pdfminer — distinguish the "no password
+        # supplied" case so the UI can prompt instead of saying "wrong".
+        if not password:
+            raise PdfPasswordRequired() from exc
+        raise PdfPasswordIncorrect() from exc
+    except _PDFEncryptionError as exc:
+        raise PdfPasswordRequired() from exc
+
+    with pdf_ctx as pdf:
         for page in pdf.pages:
             tables = page.extract_tables()
             if not tables:
