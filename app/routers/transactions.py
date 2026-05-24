@@ -447,8 +447,13 @@ def process_transaction(
         month=txn_date.month,
         year=txn_date.year,
         notes=body.notes,
+        # Precedence: user pick at categorize time → raw-row hint set at
+        # create time → classifier heuristic (positive=expense,
+        # negative=refund/transfer; never income).
         txn_type=(
-            txn.txn_type or classify_txn_type(txn.description, Decimal(str(txn.amount)))
+            body.txn_type
+            or txn.txn_type
+            or classify_txn_type(txn.description, Decimal(str(txn.amount)))
         ),
     )
     db.add(processed)

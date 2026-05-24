@@ -31,6 +31,7 @@ from app.schemas import (  # noqa: E402
     BackupNamedEntity,
     BackupTransaction,
     CreateRawTransactionRequest,
+    ProcessTransactionRequest,
 )
 from app.services.backup import (  # noqa: E402
     export_user_data,
@@ -97,6 +98,26 @@ def test_create_raw_transaction_request_txn_type_optional():
         txn_date=datetime(2026, 5, 1),
         description="Swiggy",
         amount=Decimal("449"),
+    )
+    assert body.txn_type is None
+
+
+def test_process_transaction_request_accepts_txn_type():
+    """Categorize-time type pick must round-trip through the schema."""
+    body = ProcessTransactionRequest(
+        raw_txn_id=uuid.uuid4(),
+        category_id=uuid.uuid4(),
+        txn_type="income",
+    )
+    assert body.txn_type == "income"
+
+
+def test_process_transaction_request_txn_type_optional():
+    """Default behavior preserved when txn_type omitted (falls back to
+    raw.txn_type, then classifier — verified at the router level)."""
+    body = ProcessTransactionRequest(
+        raw_txn_id=uuid.uuid4(),
+        category_id=uuid.uuid4(),
     )
     assert body.txn_type is None
 

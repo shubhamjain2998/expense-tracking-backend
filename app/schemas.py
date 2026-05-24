@@ -221,6 +221,10 @@ class ProcessTransactionRequest(BaseModel):
     save_mapping: bool = False
     shares: List[PersonShareIn] = []
     notes: Optional[str] = None
+    # If set, becomes the processed txn's type. Otherwise falls back to the
+    # raw row's txn_type, then to classify_txn_type. Lets the categorize UI
+    # mark a statement-uploaded credit as income at the moment of processing.
+    txn_type: Optional[Literal["expense", "income", "refund", "transfer"]] = None
 
 
 class PatchProcessedTransactionRequest(BaseModel):
