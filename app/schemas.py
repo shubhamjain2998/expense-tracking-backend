@@ -88,6 +88,7 @@ class RawTransactionOut(BaseModel):
     amount: Decimal
     status: str
     deleted_at: Optional[datetime] = None
+    txn_type: Optional[Literal["expense", "income", "refund", "transfer"]] = None
 
 
 class UploadStatementResponse(BaseModel):
