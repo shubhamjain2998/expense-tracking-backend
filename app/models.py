@@ -214,6 +214,10 @@ class RawTransaction(TimestampMixin, Base):
         ForeignKey("uploaded_files.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Optional hint set when the user creates the row manually (Quick Add /
+    # Manual Entry) so the later categorize step can carry it through instead
+    # of running classify_txn_type, which has no rule that returns "income".
+    txn_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     processed: Mapped[Optional["ProcessedTransaction"]] = relationship(
         back_populates="raw_transaction"

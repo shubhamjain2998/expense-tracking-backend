@@ -225,6 +225,7 @@ def create_raw_transaction(
         description=body.description,
         amount=body.amount,
         status="pending",
+        txn_type=body.txn_type,
     )
     db.add(txn)
     db.commit()
@@ -327,7 +328,10 @@ def auto_categorise(
                 effective_amount=txn.amount,
                 month=txn.txn_date.month,
                 year=txn.txn_date.year,
-                txn_type=classify_txn_type(txn.description, Decimal(str(txn.amount))),
+                txn_type=(
+                    txn.txn_type
+                    or classify_txn_type(txn.description, Decimal(str(txn.amount)))
+                ),
             )
             db.add(processed)
             txn.status = "processed"
@@ -443,7 +447,9 @@ def process_transaction(
         month=txn_date.month,
         year=txn_date.year,
         notes=body.notes,
-        txn_type=classify_txn_type(txn.description, Decimal(str(txn.amount))),
+        txn_type=(
+            txn.txn_type or classify_txn_type(txn.description, Decimal(str(txn.amount)))
+        ),
     )
     db.add(processed)
     db.flush()

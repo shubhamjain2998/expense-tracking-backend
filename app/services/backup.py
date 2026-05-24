@@ -30,6 +30,7 @@ from app.models import (
     Tag,
     TransactionPersonShare,
 )
+from app.routers.transactions import classify_txn_type
 from app.schemas import (
     BackupBudgetPlan,
     BackupCategoryMapping,
@@ -132,6 +133,7 @@ def export_user_data(user_id: uuid.UUID, db: Session) -> BackupExport:
                 amount=Decimal(str(t.amount)),
                 category=t.category.name,
                 notes=t.notes,
+                txn_type=t.txn_type,
                 tags=[tag.name for tag in t.tags],
                 shares=[
                     BackupShare(
@@ -344,6 +346,10 @@ def import_user_data(
 
         effective_amount = amount_dec - others_total
 
+        # Honor txn_type from the backup payload (so income round-trips); fall
+        # back to the same heuristic POST /transactions uses for fresh imports.
+        resolved_type = t.txn_type or classify_txn_type(t.description, amount_dec)
+
         processed = ProcessedTransaction(
             user_id=user_id,
             raw_txn_id=raw.id,
@@ -356,6 +362,7 @@ def import_user_data(
             month=t.txn_date.month,
             year=t.txn_date.year,
             notes=t.notes,
+            txn_type=resolved_type,
         )
         db.add(processed)
         db.flush()

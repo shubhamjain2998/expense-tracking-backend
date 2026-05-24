@@ -120,6 +120,10 @@ class CreateRawTransactionRequest(BaseModel):
     txn_date: datetime
     description: str
     amount: Decimal
+    # Optional user-chosen type. When supplied, it's stored on the raw row
+    # and honored later during categorize so an "income" pick survives the
+    # classify_txn_type heuristic (which has no rule that returns income).
+    txn_type: Optional[Literal["expense", "income", "refund", "transfer"]] = None
 
     @field_validator("amount")
     @classmethod
@@ -355,6 +359,10 @@ class BackupTransaction(BaseModel):
     amount: Decimal
     category: str
     notes: Optional[str] = None
+    # Optional so backups produced by older versions (or hand-authored from
+    # spreadsheets) still import cleanly — fallback is the amount-sign
+    # heuristic the create-process flow already uses.
+    txn_type: Optional[Literal["expense", "income", "refund", "transfer"]] = None
     tags: List[str] = []
     shares: List[BackupShare] = []
 
