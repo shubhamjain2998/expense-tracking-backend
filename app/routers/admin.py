@@ -17,6 +17,7 @@ from app.models import (
     RawTransaction,
     Tag,
     TransactionPersonShare,
+    User,
     transaction_tags,
 )
 
@@ -95,12 +96,11 @@ def delete_all_persons(
     db.commit()
 
 
-@router.delete("/all", status_code=204)
-def delete_everything(
-    db: Session = Depends(get_db),
-    user_id: uuid.UUID = Depends(get_current_user),
-):
-    """Delete all data belonging to the current user."""
+def _delete_all_user_data(db: Session, user_id: uuid.UUID) -> None:
+    """Delete every row owned by the user. Caller commits.
+
+    Shared by /admin/all (data wipe only) and /admin/account (data + user row).
+    """
     # transaction_tags rows cascade from processed_transactions; delete explicitly
     # to avoid FK violations when deleting tags
     user_txn_ids = (
@@ -129,4 +129,28 @@ def delete_everything(
     db.execute(delete(Person).where(Person.user_id == user_id))
     db.execute(delete(Tag).where(Tag.user_id == user_id))
     db.execute(delete(Category).where(Category.user_id == user_id))
+
+
+@router.delete("/all", status_code=204)
+def delete_everything(
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+):
+    """Delete all data belonging to the current user."""
+    _delete_all_user_data(db, user_id)
+    db.commit()
+
+
+@router.delete("/account", status_code=204)
+def delete_account(
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+):
+    """Delete every row owned by the user and the user record itself.
+
+    After this returns, the caller's JWT still parses but get_current_user
+    rejects it because the user row is gone — 401 on the next request.
+    """
+    _delete_all_user_data(db, user_id)
+    db.execute(delete(User).where(User.id == user_id))
     db.commit()
