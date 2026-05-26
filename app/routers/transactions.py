@@ -511,9 +511,13 @@ def delete_processed_transaction(
     ).scalar_one_or_none()
     if processed is None:
         raise HTTPException(status_code=404, detail="Processed transaction not found")
+    # Delete means delete. Soft-delete the raw row too instead of bubbling it
+    # back to pending — that previously forced users to delete the same txn
+    # twice. The raw is recoverable via /raw/{id}/restore if needed.
     raw = db.get(RawTransaction, processed.raw_txn_id)
     if raw is not None:
-        raw.status = "pending"
+        raw.status = "deleted"
+        raw.deleted_at = datetime.now(timezone.utc)
     db.delete(processed)
     db.commit()
 
