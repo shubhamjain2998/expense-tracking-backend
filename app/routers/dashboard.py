@@ -348,11 +348,42 @@ def ytd(
     ).all()
     actual_map = {row.name: Decimal(str(row.actual)) for row in actual_rows}
 
-    all_categories = set(budget_map) | set(actual_map)
+    # Income categories: surfaced as separate rows with a NEGATIVE actual_ytd
+    # (income rows carry negative effective_amount in the DB). Frontend filters
+    # `actual_ytd < 0` to extract the per-category income breakdown; `> 0` keeps
+    # expense rows. A category with both expense and income txns is reported
+    # under expenses only — the per-month income KPI total still reflects all
+    # income via /multi-month-summary.
+    income_rows = db.execute(
+        select(
+            Category.name,
+            func.sum(ProcessedTransaction.effective_amount).label("actual"),
+        )
+        .join(Category, Category.id == ProcessedTransaction.category_id)
+        .where(
+            ProcessedTransaction.txn_date >= start,
+            ProcessedTransaction.txn_date <= end,
+            ProcessedTransaction.user_id == user_id,
+            ProcessedTransaction.txn_type == "income",
+        )
+        .group_by(Category.name)
+    ).all()
+    income_map = {
+        row.name: Decimal(str(row.actual))
+        for row in income_rows
+        if row.name not in actual_map
+    }
+
+    all_categories = set(budget_map) | set(actual_map) | set(income_map)
     result = []
     for cat in sorted(all_categories):
         allocated = budget_map.get(cat, Decimal("0"))
-        actual = actual_map.get(cat, Decimal("0"))
+        if cat in actual_map:
+            actual = actual_map[cat]
+        elif cat in income_map:
+            actual = income_map[cat]
+        else:
+            actual = Decimal("0")
         variance = allocated - actual
         pct_used = float(actual / allocated * 100) if allocated else None
         result.append(
