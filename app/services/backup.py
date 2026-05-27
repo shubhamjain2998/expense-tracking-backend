@@ -30,7 +30,7 @@ from app.models import (
     Tag,
     TransactionPersonShare,
 )
-from app.routers.transactions import classify_txn_type
+from app.routers.transactions import _apply_sign_convention, classify_txn_type
 from app.schemas import (
     BackupBudgetPlan,
     BackupCategoryMapping,
@@ -370,6 +370,9 @@ def import_user_data(
         for rec in share_records:
             rec.processed_txn_id = processed.id
             db.add(rec)
+        db.flush()
+
+        _apply_sign_convention(processed)
 
         # Tags
         if t.tags:

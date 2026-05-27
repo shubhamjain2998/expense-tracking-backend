@@ -112,6 +112,33 @@ def _compute_effective_amount(total: Decimal, shares: List[PersonShareIn]) -> De
     return total - others_total
 
 
+# Storage sign convention: expense > 0, income/refund/transfer < 0. The PDF
+# parser already follows it (positive = debit, negative = credit); manual
+# entries arrive unsigned, so we normalize here. Aggregation in dashboard.py
+# (e.g. `-effective_amount` for income in /monthly-trend, `actual_ytd < 0`
+# filter in /ytd) depends on this invariant — keep them in sync.
+_NEGATIVE_TXN_TYPES = frozenset({"income", "refund", "transfer"})
+
+
+def _sign_for(txn_type: str) -> int:
+    return -1 if txn_type in _NEGATIVE_TXN_TYPES else 1
+
+
+def _apply_sign_convention(processed: ProcessedTransaction) -> None:
+    """Re-sign amount, effective_amount, and share_amounts based on txn_type.
+
+    Call after constructing a new ProcessedTransaction, or after txn_type /
+    amount / shares change in a patch. Idempotent.
+    """
+    sign = _sign_for(processed.txn_type)
+    processed.amount = float(sign * abs(Decimal(str(processed.amount))))
+    processed.effective_amount = float(
+        sign * abs(Decimal(str(processed.effective_amount)))
+    )
+    for share in processed.shares:
+        share.share_amount = float(sign * abs(Decimal(str(share.share_amount))))
+
+
 def _build_share_records(
     processed_txn_id: uuid.UUID,
     total: Decimal,
@@ -387,6 +414,7 @@ def auto_categorise(
                 ),
             )
             db.add(processed)
+            _apply_sign_convention(processed)
             txn.status = "processed"
             best_mapping.match_count += 1
             best_mapping.last_used = datetime.now(timezone.utc)
@@ -514,6 +542,9 @@ def process_transaction(
 
     for record in _build_share_records(processed.id, total, body.shares, user_id, db):
         db.add(record)
+    db.flush()
+
+    _apply_sign_convention(processed)
 
     txn.status = "processed"
     db.commit()
@@ -654,6 +685,9 @@ def patch_processed_transaction(
         if mapping:
             mapping.category_id = processed.category_id
             mapping.last_used = datetime.now(timezone.utc)
+
+    db.flush()
+    _apply_sign_convention(processed)
 
     db.commit()
     db.refresh(processed)
