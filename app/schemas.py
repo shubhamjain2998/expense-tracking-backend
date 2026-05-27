@@ -240,6 +240,14 @@ class PatchProcessedTransactionRequest(BaseModel):
     txn_type: Optional[Literal["expense", "income", "refund", "transfer"]] = None
 
 
+class AutoCategoriseRequest(BaseModel):
+    # If omitted, the endpoint processes every pending row for the user.
+    # If provided, only pending rows whose id is in this list (and which
+    # belong to the user) are considered — used for the bulk-selection
+    # "auto-categorise N" action in the UI.
+    raw_txn_ids: Optional[List[uuid.UUID]] = None
+
+
 class AutoCategoriseResponse(BaseModel):
     auto_categorised: int
     pending_manual: int
