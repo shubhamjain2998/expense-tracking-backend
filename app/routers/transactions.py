@@ -7,13 +7,13 @@ to processed when a learned category mapping matches their description at
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from rapidfuzz import fuzz
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.services.normalizer import normalize_description
 from app.services.period import (
@@ -36,6 +36,7 @@ from app.models import (
     transaction_tags,
 )
 from app.schemas import (
+    AutoCategoriseRequest,
     AutoCategoriseResponse,
     BulkTagRequest,
     CreateRawTransactionRequest,
@@ -48,6 +49,38 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
+
+# Soft-deleted raw transactions are permanently purged after this many days.
+# Mirrors the trash-retention conventions in Gmail / iCloud — long enough to
+# undo accidents, short enough to bound storage.
+SOFT_DELETE_RETENTION_DAYS = 30
+
+
+def _purge_expired_soft_deletes(db: Session, user_id: uuid.UUID) -> int:
+    """Hard-delete raw transactions that have been soft-deleted past the
+    retention window. Returns the count purged. Caller is responsible for
+    committing.
+
+    Safe because ``delete_processed_transaction`` always hard-deletes the
+    processed row before soft-deleting its raw, so an expired soft-deleted
+    raw has no live processed reference. The defensive subquery filter on
+    ``raw_txn_id`` keeps that invariant explicit instead of implicit.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=SOFT_DELETE_RETENTION_DAYS)
+    live_raw_ids = select(ProcessedTransaction.raw_txn_id).where(
+        ProcessedTransaction.user_id == user_id
+    )
+    result = db.execute(
+        delete(RawTransaction).where(
+            RawTransaction.user_id == user_id,
+            RawTransaction.status == "deleted",
+            RawTransaction.deleted_at.is_not(None),
+            RawTransaction.deleted_at < cutoff,
+            RawTransaction.id.not_in(live_raw_ids),
+        )
+    )
+    return result.rowcount or 0
+
 
 _TRANSFER_PATTERNS = (
     "CREDIT CARD PAYMENT",
@@ -248,7 +281,21 @@ def delete_raw_transaction(
         raise HTTPException(status_code=404, detail="Raw transaction not found")
     txn.status = "deleted"
     txn.deleted_at = datetime.now(timezone.utc)
+    _purge_expired_soft_deletes(db, user_id)
     db.commit()
+
+
+@router.post("/raw/purge-expired", status_code=200)
+def purge_expired_raw_transactions(
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+) -> dict:
+    """Manually trigger the retention purge for the current user. Returns the
+    count of rows hard-deleted. Useful for ad-hoc cleanup; the routine purge
+    runs automatically on every soft-delete."""
+    count = _purge_expired_soft_deletes(db, user_id)
+    db.commit()
+    return {"purged": count, "retention_days": SOFT_DELETE_RETENTION_DAYS}
 
 
 @router.patch("/raw/{id}/restore", response_model=RawTransactionOut)
@@ -265,6 +312,7 @@ def restore_raw_transaction(
     if txn is None:
         raise HTTPException(status_code=404, detail="Raw transaction not found")
     txn.status = "pending"
+    txn.deleted_at = None
     db.commit()
     db.refresh(txn)
     return txn
@@ -275,19 +323,24 @@ def restore_raw_transaction(
 
 @router.post("/auto-categorise", response_model=AutoCategoriseResponse)
 def auto_categorise(
+    body: Optional[AutoCategoriseRequest] = None,
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
-    pending = (
-        db.execute(
-            select(RawTransaction).where(
-                RawTransaction.status == "pending",
-                RawTransaction.user_id == user_id,
-            )
-        )
-        .scalars()
-        .all()
+    # Selective auto-categorise: if the caller passed a list of raw_txn_ids,
+    # only those IDs are considered. The user-scope filter still applies, so a
+    # caller can't process another user's rows by guessing an id. An empty list
+    # is treated as "process nothing" rather than "process everything" so an
+    # accidental empty selection in the UI does not run a full sweep.
+    pending_q = select(RawTransaction).where(
+        RawTransaction.status == "pending",
+        RawTransaction.user_id == user_id,
     )
+    if body is not None and body.raw_txn_ids is not None:
+        if not body.raw_txn_ids:
+            return AutoCategoriseResponse(auto_categorised=0, pending_manual=0)
+        pending_q = pending_q.where(RawTransaction.id.in_(body.raw_txn_ids))
+    pending = db.execute(pending_q).scalars().all()
 
     mappings = (
         db.execute(select(CategoryMapping).where(CategoryMapping.user_id == user_id))
@@ -519,6 +572,8 @@ def delete_processed_transaction(
         raw.status = "deleted"
         raw.deleted_at = datetime.now(timezone.utc)
     db.delete(processed)
+    db.flush()
+    _purge_expired_soft_deletes(db, user_id)
     db.commit()
 
 
