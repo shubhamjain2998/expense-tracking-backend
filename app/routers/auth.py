@@ -6,6 +6,7 @@ and also returned in the response body for legacy clients.
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Literal, Optional
 
 import bcrypt
 import jwt
@@ -20,6 +21,8 @@ from app.auth import AUTH_COOKIE_NAME, get_current_user
 from app.config import settings
 from app.database import get_db
 from app.models import User
+
+PeriodMode = Literal["calendar", "fy"]
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -58,6 +61,13 @@ class TokenResponse(BaseModel):
 class MeResponse(BaseModel):
     id: uuid.UUID
     email: str
+    # None means the user has not picked yet; the frontend prompts them on the
+    # Budget empty state before they can create a budget.
+    period_mode: Optional[PeriodMode] = None
+
+
+class PreferencesUpdate(BaseModel):
+    period_mode: PeriodMode
 
 
 def _make_token(user_id: str) -> str:
@@ -206,4 +216,22 @@ def me(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User no longer exists",
         )
-    return MeResponse(id=user.id, email=user.email)
+    return MeResponse(id=user.id, email=user.email, period_mode=user.period_mode)
+
+
+@router.patch("/me/preferences", response_model=MeResponse)
+def update_preferences(
+    body: PreferencesUpdate,
+    user_id: uuid.UUID = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User no longer exists",
+        )
+    user.period_mode = body.period_mode
+    db.commit()
+    db.refresh(user)
+    return MeResponse(id=user.id, email=user.email, period_mode=user.period_mode)

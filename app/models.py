@@ -64,6 +64,9 @@ class User(TimestampMixin, Base):
     google_sub: Mapped[Optional[str]] = mapped_column(
         String, nullable=True, unique=True
     )
+    # "calendar" | "fy" | NULL. NULL means the user has not yet picked; the
+    # frontend treats that as "show the chooser on the Budget empty state".
+    period_mode: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 
 # ─── Category ─────────────────────────────────────────────────────────────────────
