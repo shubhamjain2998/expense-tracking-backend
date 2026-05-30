@@ -5,6 +5,7 @@ of the same body return 409 Conflict.
 """
 
 import hashlib
+import json
 import uuid
 from decimal import Decimal
 from typing import Optional
@@ -17,6 +18,7 @@ from app.auth import get_current_user
 from app.database import get_db
 from app.models import RawTransaction, UploadedFile
 from app.schemas import (
+    JsonImportRequest,
     ParseTextRequest,
     PreviewRow,
     PreviewStatementResponse,
@@ -209,6 +211,69 @@ async def upload_statement(
         skipped_rows=result.skipped_rows,
         rows=[RawTransactionOut.model_validate(txn) for txn in db_rows],
         warnings=result.warnings,
+    )
+
+
+# ── POST /uploads/json-import ─────────────────────────────────────────────────
+
+
+@router.post("/json-import", response_model=UploadStatementResponse, status_code=201)
+def json_import(
+    body: JsonImportRequest,
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+) -> UploadStatementResponse:
+    """Persist already-parsed rows from a bulk-paste import.
+
+    Same insertion semantics as ``/uploads/statement`` and ``/uploads/text-import``:
+    signed amounts, ``clean_description``, ``status='pending'``, linked to an
+    ``UploadedFile`` row for the same content-hash 409 dedupe the other paths
+    have. Hash is computed over a canonical sort so re-pastes of the same rows
+    in a different order collide. No ``txn_type`` is stored — direction is
+    derived downstream by ``classify_txn_type`` exactly as it is for PDF rows.
+    """
+    canonical = json.dumps(
+        sorted(
+            [
+                {
+                    "d": r.txn_date.isoformat(),
+                    "x": r.description.strip(),
+                    "a": str(r.amount),
+                }
+                for r in body.rows
+            ],
+            key=lambda x: (x["d"], x["x"], x["a"]),
+        ),
+        separators=(",", ":"),
+    )
+    content_hash = _sha256(canonical.encode())
+    _check_duplicate(content_hash, user_id, db)
+
+    upload = _record_upload(content_hash, user_id, "bulk_paste", None, db)
+
+    db_rows: list[RawTransaction] = []
+    for row in body.rows:
+        txn = RawTransaction(
+            user_id=user_id,
+            txn_date=row.txn_date,
+            description=clean_description(row.description),
+            amount=Decimal(str(row.amount)),
+            status="pending",
+            upload_id=upload.id,
+        )
+        db.add(txn)
+        db_rows.append(txn)
+
+    db.commit()
+    for txn in db_rows:
+        db.refresh(txn)
+
+    return UploadStatementResponse(
+        inserted=len(db_rows),
+        skipped=0,
+        skipped_rows=[],
+        rows=[RawTransactionOut.model_validate(txn) for txn in db_rows],
+        warnings=[],
     )
 
 

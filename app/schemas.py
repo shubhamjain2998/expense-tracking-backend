@@ -117,6 +117,31 @@ class ParseTextRequest(BaseModel):
     text: str
 
 
+class JsonImportRow(BaseModel):
+    """One pre-parsed row from a bulk-paste import.
+
+    Same shape as ``PreviewRow`` — the LLM has already done the extraction
+    work that the PDF/text parsers do server-side. Sign convention is
+    identical to the PDF flow: positive = expense (money out), negative =
+    income/refund/transfer (money in). ``classify_txn_type`` derives the
+    direction downstream, so no ``txn_type`` field is needed here."""
+
+    txn_date: datetime
+    description: str = Field(..., min_length=1, max_length=500)
+    amount: Decimal
+
+    @field_validator("amount")
+    @classmethod
+    def amount_must_be_nonzero(cls, v: Decimal) -> Decimal:
+        if v == 0:
+            raise ValueError("amount must be non-zero")
+        return v
+
+
+class JsonImportRequest(BaseModel):
+    rows: List[JsonImportRow] = Field(..., min_length=1, max_length=500)
+
+
 class CreateRawTransactionRequest(BaseModel):
     txn_date: datetime
     description: str
