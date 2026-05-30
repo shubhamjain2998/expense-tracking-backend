@@ -26,7 +26,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # The PAT-less default token can't push to a protected branch, but
           # branch protection is not yet enabled on main — see roadmap.
