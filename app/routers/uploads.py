@@ -158,18 +158,41 @@ async def upload_statement(
         default=None,
         description="Password for an encrypted PDF. Held in memory only.",
     ),
+    exclude_indices: Optional[str] = Form(
+        default=None,
+        description=(
+            "Comma-separated zero-based indices of parsed rows to exclude from "
+            "insertion. Omit (or send empty string) to insert all rows. "
+            "Example: '0,3,7' skips the 1st, 4th, and 8th rows."
+        ),
+    ),
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ) -> UploadStatementResponse:
     """
-    Parse a bank-statement PDF and persist all extracted transactions as
+    Parse a bank-statement PDF and persist extracted transactions as
     raw_transactions with status='pending'.
+
+    ``exclude_indices`` allows the client to atomically exclude specific preview
+    rows from insertion, replacing the prior pattern of import-all then
+    delete-excluded in a separate step.
     """
     _require_pdf(file)
 
     pdf_bytes = await file.read()
     if not pdf_bytes:
         raise HTTPException(status_code=422, detail="Uploaded file is empty.")
+
+    # Parse the optional exclude list — integers only, duplicates collapsed.
+    excluded: set[int] = set()
+    if exclude_indices:
+        try:
+            excluded = {int(x.strip()) for x in exclude_indices.split(",") if x.strip()}
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail="exclude_indices must be a comma-separated list of integers.",
+            )
 
     content_hash = _sha256(pdf_bytes)
     _check_duplicate(content_hash, user_id, db)
@@ -189,7 +212,9 @@ async def upload_statement(
     upload = _record_upload(content_hash, user_id, "pdf", file.filename, db)
 
     db_rows: list[RawTransaction] = []
-    for row in result.rows:
+    for idx, row in enumerate(result.rows):
+        if idx in excluded:
+            continue
         txn = RawTransaction(
             user_id=user_id,
             txn_date=row.txn_date,
