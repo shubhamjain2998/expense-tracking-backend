@@ -4,7 +4,7 @@ import uuid
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, outerjoin, select
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
@@ -20,13 +20,37 @@ def list_categories(
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
 ):
-    return (
-        db.execute(
-            select(Category).where(Category.user_id == user_id).order_by(Category.name)
+    """List all categories for the authenticated user.
+
+    ``txn_count`` is the number of processed transactions that reference each
+    category.  It is computed with a single LEFT OUTER JOIN + GROUP BY so the
+    full list is fetched in one round-trip regardless of how many categories
+    the user has.
+    """
+    rows = db.execute(
+        select(
+            Category,
+            func.count(ProcessedTransaction.id).label("txn_count"),
         )
-        .scalars()
-        .all()
-    )
+        .select_from(
+            outerjoin(
+                Category,
+                ProcessedTransaction,
+                (ProcessedTransaction.category_id == Category.id)
+                & (ProcessedTransaction.user_id == user_id),
+            )
+        )
+        .where(Category.user_id == user_id)
+        .group_by(Category.id)
+        .order_by(Category.name)
+    ).all()
+
+    result = []
+    for category, txn_count in rows:
+        out = CategoryOut.model_validate(category)
+        out.txn_count = txn_count
+        result.append(out)
+    return result
 
 
 @router.post("", response_model=CategoryOut, status_code=201)
