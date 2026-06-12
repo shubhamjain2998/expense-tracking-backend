@@ -286,6 +286,11 @@ class BulkTagRequest(BaseModel):
 # ─── Category mappings ────────────────────────────────────────────────────
 
 
+class CategoryMappingCreate(BaseModel):
+    description_pattern: str = Field(..., min_length=1, max_length=500)
+    category_id: uuid.UUID
+
+
 class CategoryMappingOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
