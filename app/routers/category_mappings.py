@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import Category, CategoryMapping
-from app.schemas import CategoryMappingCreate, CategoryMappingOut
+from app.schemas import CategoryMappingCreate, CategoryMappingOut, CategoryMappingPatch
 
 router = APIRouter(prefix="/category-mappings", tags=["category-mappings"])
 
@@ -77,6 +77,48 @@ def create_mapping(
         last_used=datetime.now(timezone.utc),
     )
     db.add(mapping)
+    db.commit()
+    db.refresh(mapping)
+    return CategoryMappingOut.from_orm(mapping)
+
+
+@router.patch("/{id}", response_model=CategoryMappingOut)
+def update_mapping(
+    id: uuid.UUID,
+    body: CategoryMappingPatch,
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+):
+    """Edit the pattern and/or category of an existing mapping.
+
+    Returns 404 for a mapping that does not exist or belongs to another user.
+    Returns 404 if the supplied category_id does not exist or belongs to
+    another user.  An empty body is a valid no-op that returns the mapping
+    unchanged.
+    """
+    mapping = db.execute(
+        select(CategoryMapping).where(
+            CategoryMapping.id == id, CategoryMapping.user_id == user_id
+        )
+    ).scalar_one_or_none()
+    if mapping is None:
+        raise HTTPException(status_code=404, detail="Category mapping not found")
+
+    if body.category_id is not None:
+        cat = db.execute(
+            select(Category).where(
+                Category.id == body.category_id, Category.user_id == user_id
+            )
+        ).scalar_one_or_none()
+        if cat is None:
+            raise HTTPException(
+                status_code=404, detail=f"Category {body.category_id} not found"
+            )
+        mapping.category_id = body.category_id
+
+    if body.description_pattern is not None:
+        mapping.description_pattern = body.description_pattern.strip()
+
     db.commit()
     db.refresh(mapping)
     return CategoryMappingOut.from_orm(mapping)

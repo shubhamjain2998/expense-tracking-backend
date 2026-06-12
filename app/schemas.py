@@ -291,6 +291,11 @@ class CategoryMappingCreate(BaseModel):
     category_id: uuid.UUID
 
 
+class CategoryMappingPatch(BaseModel):
+    description_pattern: Optional[str] = Field(None, min_length=1, max_length=500)
+    category_id: Optional[uuid.UUID] = None
+
+
 class CategoryMappingOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
