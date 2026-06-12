@@ -55,7 +55,7 @@ def client():
 def test_register_returns_token_and_sets_cookie(client):
     r = client.post(
         "/auth/register",
-        json={"email": "a@example.com", "password": "hunter2"},
+        json={"email": "a@example.com", "password": "hunter2!"},
     )
     assert r.status_code == 201
     body = r.json()
@@ -75,7 +75,7 @@ def test_register_returns_token_and_sets_cookie(client):
 
 
 def test_register_duplicate_email(client):
-    payload = {"email": "dup@example.com", "password": "pw"}
+    payload = {"email": "dup@example.com", "password": "password1"}
     assert client.post("/auth/register", json=payload).status_code == 201
     r = client.post("/auth/register", json=payload)
     assert r.status_code == 409
@@ -85,19 +85,23 @@ def test_register_duplicate_email(client):
 
 
 def test_login_sets_cookie_and_returns_token(client):
-    client.post("/auth/register", json={"email": "b@example.com", "password": "pw"})
+    client.post(
+        "/auth/register", json={"email": "b@example.com", "password": "password1"}
+    )
     # Clear cookie jar so we know the login response alone sets it.
     client.cookies.clear()
     r = client.post(
         "/auth/login",
-        json={"email": "b@example.com", "password": "pw"},
+        json={"email": "b@example.com", "password": "password1"},
     )
     assert r.status_code == 200
     assert r.cookies.get(AUTH_COOKIE_NAME) == r.json()["access_token"]
 
 
 def test_login_invalid_credentials(client):
-    client.post("/auth/register", json={"email": "c@example.com", "password": "pw"})
+    client.post(
+        "/auth/register", json={"email": "c@example.com", "password": "password1"}
+    )
     r = client.post(
         "/auth/login",
         json={"email": "c@example.com", "password": "wrong"},
@@ -112,7 +116,7 @@ def test_login_invalid_credentials(client):
 def test_me_with_cookie(client):
     client.post(
         "/auth/register",
-        json={"email": "d@example.com", "password": "pw"},
+        json={"email": "d@example.com", "password": "password1"},
     )
     # TestClient persists cookies across requests in its jar.
     r = client.get("/auth/me")
@@ -123,7 +127,7 @@ def test_me_with_cookie(client):
 def test_me_with_bearer_header(client):
     reg = client.post(
         "/auth/register",
-        json={"email": "e@example.com", "password": "pw"},
+        json={"email": "e@example.com", "password": "password1"},
     )
     token = reg.json()["access_token"]
     # Drop the cookie so only the header authenticates the request.
@@ -150,7 +154,7 @@ def test_me_with_invalid_cookie(client):
 def test_logout_clears_cookie(client):
     client.post(
         "/auth/register",
-        json={"email": "f@example.com", "password": "pw"},
+        json={"email": "f@example.com", "password": "password1"},
     )
     assert client.get("/auth/me").status_code == 200
 
