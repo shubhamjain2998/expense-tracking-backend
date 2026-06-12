@@ -14,6 +14,7 @@ class CategoryOut(BaseModel):
 
     id: uuid.UUID
     name: str
+    txn_count: int = 0
 
 
 class CategoryCreate(BaseModel):
