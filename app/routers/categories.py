@@ -198,6 +198,24 @@ def delete_category(
                 .execution_options(synchronize_session=False)
             )
 
+        # Nullify mapping_id refs before deleting mappings (FK has no ondelete=SET NULL)
+        mapping_ids = (
+            db.execute(
+                select(CategoryMapping.id).where(
+                    CategoryMapping.category_id == id,
+                    CategoryMapping.user_id == user_id,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if mapping_ids:
+            db.execute(
+                sa_update(ProcessedTransaction)
+                .where(ProcessedTransaction.mapping_id.in_(mapping_ids))
+                .values(mapping_id=None)
+                .execution_options(synchronize_session=False)
+            )
         # Delete all mappings for this category
         db.execute(
             sa_delete(CategoryMapping)
@@ -257,6 +275,13 @@ def delete_category(
                 )
             ).scalar_one_or_none()
             if conflict:
+                # Nullify refs before delete (FK has no ondelete=SET NULL)
+                db.execute(
+                    sa_update(ProcessedTransaction)
+                    .where(ProcessedTransaction.mapping_id == mapping.id)
+                    .values(mapping_id=None)
+                    .execution_options(synchronize_session=False)
+                )
                 db.delete(mapping)
             else:
                 mapping.category_id = target_category_id
