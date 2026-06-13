@@ -635,6 +635,14 @@ def patch_processed_transaction(
                 status_code=404, detail=f"Category {body.category_id} not found"
             )
         processed.category_id = body.category_id
+        # Always keep the mapping in sync: if this transaction was auto-categorised,
+        # update the mapping rule to point at the new category so future uploads
+        # route to the same place the user just chose.
+        if processed.mapping_id is not None:
+            mapping = db.get(CategoryMapping, processed.mapping_id)
+            if mapping:
+                mapping.category_id = body.category_id
+                mapping.last_used = datetime.now(timezone.utc)
 
     if body.description is not None:
         processed.description = body.description
@@ -679,12 +687,6 @@ def patch_processed_transaction(
 
     if body.txn_type is not None:
         processed.txn_type = body.txn_type
-
-    if body.save_mapping and processed.mapping_id is not None:
-        mapping = db.get(CategoryMapping, processed.mapping_id)
-        if mapping:
-            mapping.category_id = processed.category_id
-            mapping.last_used = datetime.now(timezone.utc)
 
     db.flush()
     _apply_sign_convention(processed)
