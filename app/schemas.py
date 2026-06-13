@@ -14,15 +14,22 @@ class CategoryOut(BaseModel):
 
     id: uuid.UUID
     name: str
+    is_income: bool = False
     txn_count: int = 0
 
 
 class CategoryCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=64)
+    is_income: bool = False
 
 
 class CategoryRename(BaseModel):
     name: str = Field(..., min_length=1, max_length=64)
+
+
+class CategoryPatch(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=64)
+    is_income: Optional[bool] = None
 
 
 # ─── Tags ────────────────────────────────────────────────────────────────────────

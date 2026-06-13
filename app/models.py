@@ -88,6 +88,9 @@ class Category(TimestampMixin, Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
+    is_income: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
 
     budget_plans: Mapped[List["BudgetPlan"]] = relationship(back_populates="category")
     processed_transactions: Mapped[List["ProcessedTransaction"]] = relationship(
