@@ -64,6 +64,8 @@ class MeResponse(BaseModel):
     # None means the user has not picked yet; the frontend prompts them on the
     # Budget empty state before they can create a budget.
     period_mode: Optional[PeriodMode] = None
+    created_at: datetime
+    has_password: bool
 
 
 class PreferencesUpdate(BaseModel):
@@ -216,7 +218,13 @@ def me(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User no longer exists",
         )
-    return MeResponse(id=user.id, email=user.email, period_mode=user.period_mode)
+    return MeResponse(
+        id=user.id,
+        email=user.email,
+        period_mode=user.period_mode,
+        created_at=user.created_at,
+        has_password=user.password_hash is not None,
+    )
 
 
 @router.patch("/me/preferences", response_model=MeResponse)
@@ -234,4 +242,10 @@ def update_preferences(
     user.period_mode = body.period_mode
     db.commit()
     db.refresh(user)
-    return MeResponse(id=user.id, email=user.email, period_mode=user.period_mode)
+    return MeResponse(
+        id=user.id,
+        email=user.email,
+        period_mode=user.period_mode,
+        created_at=user.created_at,
+        has_password=user.password_hash is not None,
+    )
