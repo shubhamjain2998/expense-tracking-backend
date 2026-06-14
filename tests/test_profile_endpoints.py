@@ -2,8 +2,8 @@
 
 Covers:
   GET  /auth/me         → now returns created_at + has_password
-  GET  /auth/me/stats   → transaction_count + total_spend
-  PATCH /auth/me/password → change password
+
+# More tests added in subsequent tasks
 """
 
 import os
@@ -38,10 +38,7 @@ def client_and_db():
     session = TestingSession()
 
     def override_get_db():
-        try:
-            yield session
-        finally:
-            pass
+        yield session
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user] = lambda: USER_ID
@@ -82,9 +79,10 @@ def test_me_has_password_false_for_google_user(client_and_db):
     )
     session.commit()
 
-    # Override current user to google user
     app.dependency_overrides[get_current_user] = lambda: google_id
-    r = client.get("/auth/me", headers={"Authorization": "Bearer fake"})
-    app.dependency_overrides[get_current_user] = lambda: USER_ID
+    try:
+        r = client.get("/auth/me", headers={"Authorization": "Bearer fake"})
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: USER_ID
     assert r.status_code == 200
     assert r.json()["has_password"] is False
