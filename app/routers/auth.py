@@ -261,20 +261,17 @@ def me_stats(
     user_id: uuid.UUID = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    count = db.execute(
-        select(func.count(ProcessedTransaction.id)).where(
-            ProcessedTransaction.user_id == user_id
-        )
-    ).scalar_one()
+    row = db.execute(
+        select(
+            func.count(ProcessedTransaction.id),
+            func.sum(ProcessedTransaction.effective_amount).filter(
+                ProcessedTransaction.txn_type.in_(["expense", "refund"])
+            ),
+        ).where(ProcessedTransaction.user_id == user_id)
+    ).one()
 
-    spend = db.execute(
-        select(func.sum(func.abs(ProcessedTransaction.amount))).where(
-            ProcessedTransaction.user_id == user_id,
-            ProcessedTransaction.amount < 0,
-        )
-    ).scalar_one_or_none()
-
+    count, spend = row
     return StatsResponse(
-        transaction_count=int(count),
+        transaction_count=int(count or 0),
         total_spend=float(spend or 0),
     )

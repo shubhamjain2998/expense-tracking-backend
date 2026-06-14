@@ -115,7 +115,7 @@ def _seed_processed_txn(
     )
     cat_id = uuid.uuid4()
     cat = Category(
-        id=cat_id, user_id=USER_ID, name=f"Cat-{cat_id.hex[:4]}", is_income=amount > 0
+        id=cat_id, user_id=USER_ID, name=f"Cat-{cat_id.hex[:4]}", is_income=amount < 0
     )
     session.add_all([raw, cat])
     session.flush()
@@ -131,7 +131,7 @@ def _seed_processed_txn(
         effective_amount=float(amount),
         month=txn_date.month,
         year=txn_date.year,
-        txn_type="expense" if amount < 0 else "income",
+        txn_type="expense" if amount > 0 else "income",
     )
     session.add(processed)
     session.commit()
@@ -148,13 +148,60 @@ def test_stats_empty(client_and_db):
 
 def test_stats_counts_and_sums_expenses(client_and_db):
     client, session = client_and_db
-    _seed_processed_txn(session, amount=Decimal("-500.00"))
-    _seed_processed_txn(session, amount=Decimal("-250.00"))
+    _seed_processed_txn(session, amount=Decimal("500.00"))  # expense (positive)
+    _seed_processed_txn(session, amount=Decimal("250.00"))  # expense (positive)
     _seed_processed_txn(
-        session, amount=Decimal("1000.00")
-    )  # income — not counted in spend
+        session, amount=Decimal("-1000.00")
+    )  # income (negative) — not in spend
     r = client.get("/auth/me/stats", headers={"Authorization": "Bearer fake"})
     assert r.status_code == 200
     body = r.json()
     assert body["transaction_count"] == 3
     assert abs(body["total_spend"] - 750.0) < 0.01
+
+
+def test_stats_excludes_other_user(client_and_db):
+    client, session = client_and_db
+    other_id = uuid.UUID("cccccccc-0000-0000-0000-000000000005")
+    other_user = User(id=other_id, email="other@example.com", password_hash="$2b$12$x")
+    session.add(other_user)
+    session.commit()
+
+    # Seed a transaction for the other user directly
+    raw_id = uuid.uuid4()
+    raw = RawTransaction(
+        id=raw_id,
+        user_id=other_id,
+        txn_date=datetime.combine(date(2025, 6, 1), datetime.min.time()),
+        description="other txn",
+        amount=500.0,
+        status="processed",
+    )
+    cat_id = uuid.uuid4()
+    cat = Category(
+        id=cat_id, user_id=other_id, name=f"Cat-{cat_id.hex[:4]}", is_income=False
+    )
+    session.add_all([raw, cat])
+    session.flush()
+    processed = ProcessedTransaction(
+        id=uuid.uuid4(),
+        user_id=other_id,
+        raw_txn_id=raw_id,
+        category_id=cat_id,
+        txn_date=date(2025, 6, 1),
+        description="other txn",
+        amount=500.0,
+        effective_amount=500.0,
+        month=6,
+        year=2025,
+        txn_type="expense",
+    )
+    session.add(processed)
+    session.commit()
+
+    # Current user (USER_ID) has no transactions — stats should be empty
+    r = client.get("/auth/me/stats", headers={"Authorization": "Bearer fake"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["transaction_count"] == 0
+    assert body["total_spend"] == 0.0
