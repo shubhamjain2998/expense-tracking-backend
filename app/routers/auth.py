@@ -14,13 +14,13 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth import AUTH_COOKIE_NAME, get_current_user
 from app.config import settings
 from app.database import get_db
-from app.models import User
+from app.models import ProcessedTransaction, User
 
 PeriodMode = Literal["calendar", "fy"]
 
@@ -248,4 +248,33 @@ def update_preferences(
         period_mode=user.period_mode,
         created_at=user.created_at,
         has_password=user.password_hash is not None,
+    )
+
+
+class StatsResponse(BaseModel):
+    transaction_count: int
+    total_spend: float
+
+
+@router.get("/me/stats", response_model=StatsResponse)
+def me_stats(
+    user_id: uuid.UUID = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    count = db.execute(
+        select(func.count(ProcessedTransaction.id)).where(
+            ProcessedTransaction.user_id == user_id
+        )
+    ).scalar_one()
+
+    spend = db.execute(
+        select(func.sum(func.abs(ProcessedTransaction.amount))).where(
+            ProcessedTransaction.user_id == user_id,
+            ProcessedTransaction.amount < 0,
+        )
+    ).scalar_one_or_none()
+
+    return StatsResponse(
+        transaction_count=int(count),
+        total_spend=float(spend or 0),
     )
