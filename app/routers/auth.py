@@ -256,6 +256,37 @@ class StatsResponse(BaseModel):
     total_spend: float
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+@router.patch("/me/password", status_code=204)
+def change_password(
+    body: ChangePasswordRequest,
+    user_id: uuid.UUID = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
+        )
+    if user.password_hash is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Account uses Google Sign-In — password change is not available",
+        )
+    if not _verify_password(body.current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect",
+        )
+    user.password_hash = _hash_password(body.new_password)
+    db.commit()
+    return None
+
+
 @router.get("/me/stats", response_model=StatsResponse)
 def me_stats(
     user_id: uuid.UUID = Depends(get_current_user),

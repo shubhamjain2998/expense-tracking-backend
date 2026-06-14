@@ -205,3 +205,74 @@ def test_stats_excludes_other_user(client_and_db):
     body = r.json()
     assert body["transaction_count"] == 0
     assert body["total_spend"] == 0.0
+
+
+# ── PATCH /auth/me/password ──────────────────────────────────────────────────
+
+
+def test_change_password_success(client_and_db):
+    """Register a real user so we have a valid bcrypt hash, then change it."""
+    client, session = client_and_db
+    import bcrypt
+
+    new_hash = bcrypt.hashpw(b"OldPass123!", bcrypt.gensalt()).decode()
+    session.execute(
+        __import__("sqlalchemy")
+        .update(User)
+        .where(User.id == USER_ID)
+        .values(password_hash=new_hash)
+    )
+    session.commit()
+
+    r = client.patch(
+        "/auth/me/password",
+        json={"current_password": "OldPass123!", "new_password": "NewPass456!"},
+        headers={"Authorization": "Bearer fake"},
+    )
+    assert r.status_code == 204
+
+
+def test_change_password_wrong_current(client_and_db):
+    client, session = client_and_db
+    import bcrypt
+
+    new_hash = bcrypt.hashpw(b"RealPass!", bcrypt.gensalt()).decode()
+    session.execute(
+        __import__("sqlalchemy")
+        .update(User)
+        .where(User.id == USER_ID)
+        .values(password_hash=new_hash)
+    )
+    session.commit()
+
+    r = client.patch(
+        "/auth/me/password",
+        json={"current_password": "WrongPass!", "new_password": "NewPass456!"},
+        headers={"Authorization": "Bearer fake"},
+    )
+    assert r.status_code == 401
+
+
+def test_change_password_google_only_account(client_and_db):
+    client, session = client_and_db
+    google_id = uuid.UUID("dddddddd-0000-0000-0000-000000000004")
+    session.add(
+        User(
+            id=google_id,
+            email="g2@example.com",
+            password_hash=None,
+            google_sub="gsub456",
+        )
+    )
+    session.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: google_id
+    try:
+        r = client.patch(
+            "/auth/me/password",
+            json={"current_password": "anything", "new_password": "NewPass456!"},
+            headers={"Authorization": "Bearer fake"},
+        )
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: USER_ID
+    assert r.status_code == 409
