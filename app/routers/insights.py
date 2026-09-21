@@ -60,8 +60,10 @@ def create_run(
 
     # model_dump(mode="json") so Decimal/date-free primitives land in the JSON
     # column exactly as validated — not Python objects the JSON codec can't
-    # serialize.
-    payload_json = body.payload.model_dump(mode="json")
+    # serialize. by_alias=True because `InsightsComparison.from_` carries the
+    # alias "from" (a Python keyword): without it the stored JSON would hold
+    # "from_", which is not what the frontend parser reads.
+    payload_json = body.payload.model_dump(mode="json", by_alias=True)
 
     if existing is not None:
         existing.schema_version = INSIGHTS_SCHEMA_VERSION

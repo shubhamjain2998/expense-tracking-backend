@@ -91,6 +91,12 @@ def valid_payload(**overrides):
                         "value": 9900,
                         "unit": "INR",
                     },
+                    "comparison": {
+                        "label": "Monthly dining",
+                        "from": 8200,
+                        "to": 9900,
+                        "unit": "INR",
+                    },
                 }
             ],
             "patterns": [
@@ -231,6 +237,29 @@ class TestCreateRun:
         assert stored["projection"]["value"] == 84500
         assert stored["charts"][0]["takeaway"].startswith("The rise starts")
         assert len(stored["questions"]) == 1
+
+    def test_comparison_round_trips_as_from_not_from_underscore(self, client_and_db):
+        """`from` is a Python keyword, so the field is `from_` with an alias.
+        Stored JSON and API response must both say "from" — a dump without
+        by_alias writes "from_" and the page draws nothing."""
+        client, session = client_and_db
+        session.commit()
+
+        client.post("/insights/runs", json=valid_payload())
+
+        row = session.query(InsightsRun).filter(InsightsRun.user_id == USER_ID).one()
+        stored = row.payload["findings"][0]["comparison"]
+        assert stored["from"] == 8200
+        assert "from_" not in stored
+
+        served = client.get("/insights/runs/latest").json()
+        comparison = served["payload"]["findings"][0]["comparison"]
+        assert comparison == {
+            "label": "Monthly dining",
+            "from": 8200,
+            "to": 9900,
+            "unit": "INR",
+        }
 
     def test_rejects_unknown_severity(self, client_and_db):
         client, session = client_and_db

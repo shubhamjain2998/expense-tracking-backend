@@ -492,6 +492,19 @@ class InsightsMetric(BaseModel):
     detail: str = Field(..., min_length=1, max_length=600)
 
 
+class InsightsComparison(BaseModel):
+    """The before/after pair a finding is about, as numbers rather than prose.
+    The page draws the two bars and works out the percentage itself, so the
+    sentence above them does not have to carry either figure."""
+
+    label: str = Field(..., min_length=1, max_length=120)
+    from_: float = Field(..., alias="from")
+    to: float
+    unit: Optional[str] = Field(None, max_length=20)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class InsightsFinding(BaseModel):
     id: str = Field(..., min_length=1, max_length=60)
     title: str = Field(..., min_length=1, max_length=200)
@@ -504,6 +517,7 @@ class InsightsFinding(BaseModel):
     annual_impact: Optional[float] = None
     confidence: Optional[Literal["high", "medium", "low"]] = None
     figure: Optional[InsightsFigure] = None
+    comparison: Optional[InsightsComparison] = None
 
 
 class InsightsPattern(BaseModel):
