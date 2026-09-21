@@ -34,7 +34,11 @@ def get_latest_run(
     run = db.execute(
         select(InsightsRun).where(InsightsRun.user_id == user_id)
     ).scalar_one_or_none()
-    if run is None:
+    # A run stored under an older schema version can no longer be serialized
+    # through ``InsightsRunOut`` — it would fail validation on the way out and
+    # 500 the page. Treat it as "no run yet" so the user simply regenerates;
+    # the stale row is overwritten by the next save (upsert on ``user_id``).
+    if run is None or run.schema_version != INSIGHTS_SCHEMA_VERSION:
         raise HTTPException(status_code=404, detail="No insights run yet")
     return run
 

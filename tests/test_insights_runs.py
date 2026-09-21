@@ -63,14 +63,29 @@ def valid_payload(**overrides):
         "period_start": "2025-06-01",
         "period_end": "2026-08-31",
         "payload": {
-            "schema_version": 1,
+            "schema_version": 2,
             "verdict": "You spent 12% more than usual on dining this quarter.",
+            "metrics": [
+                {
+                    "id": "savings-rate",
+                    "label": "Savings rate, last 3 months",
+                    "value": 14,
+                    "unit": "%",
+                    "direction": "down",
+                    "tone": "negative",
+                    "detail": "Down from 23% over the 12 months before that.",
+                }
+            ],
             "findings": [
                 {
                     "id": "dining-up",
                     "title": "Dining is trending up",
                     "severity": "warning",
                     "detail": "Dining rose from a median of ₹8,200/mo to ₹9,900/mo.",
+                    "so_what": "At this rate dining costs ₹20,400 more over a year.",
+                    "action": "Check whether delivery fees explain the jump.",
+                    "annual_impact": 20400,
+                    "confidence": "high",
                     "figure": {
                         "label": "Median dining/mo",
                         "value": 9900,
@@ -78,12 +93,28 @@ def valid_payload(**overrides):
                     },
                 }
             ],
+            "patterns": [
+                {
+                    "id": "post-credit-burst",
+                    "title": "The days after salary lands cost the most",
+                    "detail": "Discretionary spend runs 2.4x the daily average.",
+                    "evidence": "₹3,180/day vs ₹1,320/day.",
+                }
+            ],
+            "projection": {
+                "label": "Projected spend, next month",
+                "value": 84500,
+                "unit": "INR",
+                "basis": "Median of the last 6 months plus repriced commitments.",
+            },
+            "questions": ["Was the travel charge a one-off? It moves the projection."],
             "charts": [
                 {
                     "id": "dining-trend",
                     "title": "Dining by month",
                     "type": "bar",
                     "unit": "INR",
+                    "takeaway": "The rise starts in July, not in August.",
                     "series": [
                         {
                             "name": "Dining",
@@ -113,7 +144,7 @@ class TestCreateRun:
         r = client.post("/insights/runs", json=valid_payload())
         assert r.status_code == 201
         body = r.json()
-        assert body["schema_version"] == 1
+        assert body["schema_version"] == 2
         assert body["payload"]["verdict"].startswith("You spent")
         assert body["period_start"] == "2025-06-01"
         assert "ran_at" in body and body["ran_at"]
@@ -146,6 +177,60 @@ class TestCreateRun:
         bad["payload"]["schema_version"] = 99
         r = client.post("/insights/runs", json=bad)
         assert r.status_code == 422
+
+    def test_rejects_finding_without_so_what(self, client_and_db):
+        """v2's whole point: a finding must say what it costs or changes, not
+        only what happened. Without ``so_what`` it is the observation the app
+        could already make on its own."""
+        client, session = client_and_db
+        session.commit()
+
+        bad = valid_payload()
+        del bad["payload"]["findings"][0]["so_what"]
+        r = client.post("/insights/runs", json=bad)
+        assert r.status_code == 422
+
+    def test_rejects_unknown_metric_tone(self, client_and_db):
+        client, session = client_and_db
+        session.commit()
+
+        bad = valid_payload()
+        bad["payload"]["metrics"][0]["tone"] = "catastrophic"
+        r = client.post("/insights/runs", json=bad)
+        assert r.status_code == 422
+
+    def test_accepts_a_reply_with_no_optional_sections(self, client_and_db):
+        """metrics/patterns/projection/questions are all optional — an LLM
+        that returns only a verdict and findings still saves."""
+        client, session = client_and_db
+        session.commit()
+
+        body = valid_payload()
+        for key in ("metrics", "patterns", "projection", "questions", "charts"):
+            del body["payload"][key]
+        r = client.post("/insights/runs", json=body)
+        assert r.status_code == 201
+        stored = r.json()["payload"]
+        assert stored["metrics"] == []
+        assert stored["patterns"] == []
+        assert stored["questions"] == []
+        assert stored["projection"] is None
+
+    def test_round_trips_the_interpretation_fields(self, client_and_db):
+        client, session = client_and_db
+        session.commit()
+
+        client.post("/insights/runs", json=valid_payload())
+        stored = client.get("/insights/runs/latest").json()["payload"]
+        finding = stored["findings"][0]
+        assert finding["so_what"].startswith("At this rate")
+        assert finding["annual_impact"] == 20400
+        assert finding["confidence"] == "high"
+        assert stored["metrics"][0]["tone"] == "negative"
+        assert stored["patterns"][0]["evidence"] == "₹3,180/day vs ₹1,320/day."
+        assert stored["projection"]["value"] == 84500
+        assert stored["charts"][0]["takeaway"].startswith("The rise starts")
+        assert len(stored["questions"]) == 1
 
     def test_rejects_unknown_severity(self, client_and_db):
         client, session = client_and_db
@@ -222,14 +307,50 @@ class TestGetLatestRun:
         assert r.status_code == 200
         assert r.json()["payload"]["verdict"].startswith("You spent")
 
+    def test_404_when_stored_run_predates_the_current_schema(self, client_and_db):
+        """A v1 row can no longer be serialized through ``InsightsRunOut``.
+        Reading it must read as "no run yet" so the user regenerates, never as
+        a 500."""
+        client, session = client_and_db
+        stale = InsightsRun(
+            id=uuid.uuid4(),
+            user_id=USER_ID,
+            schema_version=1,
+            payload={
+                "schema_version": 1,
+                "verdict": "An older run, from before so_what existed.",
+                "findings": [
+                    {
+                        "id": "old",
+                        "title": "Old finding",
+                        "severity": "info",
+                        "detail": "No so_what on this one.",
+                    }
+                ],
+                "charts": [],
+            },
+            period_start=date(2026, 1, 1),
+            period_end=date(2026, 1, 31),
+        )
+        session.add(stale)
+        session.commit()
+
+        r = client.get("/insights/runs/latest")
+        assert r.status_code == 404
+
+        # …and saving a fresh run overwrites the stale row rather than adding one.
+        assert client.post("/insights/runs", json=valid_payload()).status_code == 201
+        rows = session.query(InsightsRun).filter(InsightsRun.user_id == USER_ID).all()
+        assert len(rows) == 1
+
     def test_does_not_leak_across_users(self, client_and_db):
         client, session = client_and_db
         other_run = InsightsRun(
             id=uuid.uuid4(),
             user_id=OTHER_USER_ID,
-            schema_version=1,
+            schema_version=2,
             payload={
-                "schema_version": 1,
+                "schema_version": 2,
                 "verdict": "other",
                 "findings": [],
                 "charts": [],
@@ -271,9 +392,9 @@ class TestDeleteLatestRun:
         other_run = InsightsRun(
             id=uuid.uuid4(),
             user_id=OTHER_USER_ID,
-            schema_version=1,
+            schema_version=2,
             payload={
-                "schema_version": 1,
+                "schema_version": 2,
                 "verdict": "other",
                 "findings": [],
                 "charts": [],

@@ -459,9 +459,15 @@ class BackupImportResponse(BaseModel):
 # ─── Insights (LLM-generated) ──────────────────────────────────────────────────
 
 # Schema version this backend accepts. Bumping it is a breaking change to the
-# prompt/response contract — see frontend `src/features/insights/lib/responseSchema.ts`,
-# which must be bumped in lockstep.
-INSIGHTS_SCHEMA_VERSION = 1
+# prompt/response contract — see frontend
+# `src/features/insights/lib/insightsResponseSchema.ts`, which must be bumped
+# in lockstep.
+#
+# v2 widened the contract from "what the numbers are" to "what they mean":
+# derived ratios (`metrics`), a required consequence on every finding
+# (`so_what`), behavioural regularities (`patterns`), a forward look
+# (`projection`), a per-chart `takeaway`, and open `questions`.
+INSIGHTS_SCHEMA_VERSION = 2
 
 
 class InsightsFigure(BaseModel):
@@ -472,12 +478,49 @@ class InsightsFigure(BaseModel):
     unit: Optional[str] = Field(None, max_length=20)
 
 
+class InsightsMetric(BaseModel):
+    """A derived ratio the app never computes for itself — savings rate,
+    committed share of income — carrying the LLM's reading of it. `tone` says
+    whether `direction` is good or bad news, which the app cannot know."""
+
+    id: str = Field(..., min_length=1, max_length=60)
+    label: str = Field(..., min_length=1, max_length=120)
+    value: float
+    unit: Optional[str] = Field(None, max_length=20)
+    direction: Optional[Literal["up", "down", "flat"]] = None
+    tone: Optional[Literal["positive", "negative", "neutral"]] = None
+    detail: str = Field(..., min_length=1, max_length=600)
+
+
 class InsightsFinding(BaseModel):
     id: str = Field(..., min_length=1, max_length=60)
     title: str = Field(..., min_length=1, max_length=200)
     severity: Literal["critical", "warning", "info", "good"]
     detail: str = Field(..., min_length=1, max_length=1000)
+    # Required since v2: the consequence, in money or in months. A finding
+    # without it is the observation the app could already make on its own.
+    so_what: str = Field(..., min_length=1, max_length=1000)
+    action: Optional[str] = Field(None, max_length=600)
+    annual_impact: Optional[float] = None
+    confidence: Optional[Literal["high", "medium", "low"]] = None
     figure: Optional[InsightsFigure] = None
+
+
+class InsightsPattern(BaseModel):
+    """A behavioural regularity (timing, trigger, sequence). Needs no
+    decision — that is what separates it from a finding."""
+
+    id: str = Field(..., min_length=1, max_length=60)
+    title: str = Field(..., min_length=1, max_length=200)
+    detail: str = Field(..., min_length=1, max_length=1000)
+    evidence: Optional[str] = Field(None, max_length=600)
+
+
+class InsightsProjection(BaseModel):
+    label: str = Field(..., min_length=1, max_length=120)
+    value: float
+    unit: Optional[str] = Field(None, max_length=20)
+    basis: str = Field(..., min_length=1, max_length=600)
 
 
 class InsightsChartPoint(BaseModel):
@@ -497,6 +540,7 @@ class InsightsChart(BaseModel):
     # design-system/kosh-ledger/MASTER.md §6. Never widen without a renderer.
     type: Literal["bar", "line", "pie", "area"]
     unit: Optional[str] = Field(None, max_length=20)
+    takeaway: Optional[str] = Field(None, max_length=400)
     series: List[InsightsChartSeries] = Field(..., min_length=1, max_length=8)
 
 
@@ -507,8 +551,12 @@ class InsightsPayload(BaseModel):
 
     schema_version: int
     verdict: str = Field(..., min_length=1, max_length=500)
+    metrics: List[InsightsMetric] = Field(default_factory=list, max_length=10)
     findings: List[InsightsFinding] = Field(..., min_length=1, max_length=30)
+    patterns: List[InsightsPattern] = Field(default_factory=list, max_length=10)
+    projection: Optional[InsightsProjection] = None
     charts: List[InsightsChart] = Field(default_factory=list, max_length=10)
+    questions: List[str] = Field(default_factory=list, max_length=8)
 
     @field_validator("schema_version")
     @classmethod
