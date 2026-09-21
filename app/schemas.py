@@ -454,3 +454,85 @@ class BackupImportResponse(BaseModel):
     transactions_imported: int
     transactions_skipped_duplicates: int
     skipped_rows: List[str] = []
+
+
+# ─── Insights (LLM-generated) ──────────────────────────────────────────────────
+
+# Schema version this backend accepts. Bumping it is a breaking change to the
+# prompt/response contract — see frontend `src/features/insights/lib/responseSchema.ts`,
+# which must be bumped in lockstep.
+INSIGHTS_SCHEMA_VERSION = 1
+
+
+class InsightsFigure(BaseModel):
+    """A single supporting number attached to a finding, e.g. '₹12,400/mo'."""
+
+    label: str = Field(..., min_length=1, max_length=120)
+    value: float
+    unit: Optional[str] = Field(None, max_length=20)
+
+
+class InsightsFinding(BaseModel):
+    id: str = Field(..., min_length=1, max_length=60)
+    title: str = Field(..., min_length=1, max_length=200)
+    severity: Literal["critical", "warning", "info", "good"]
+    detail: str = Field(..., min_length=1, max_length=1000)
+    figure: Optional[InsightsFigure] = None
+
+
+class InsightsChartPoint(BaseModel):
+    label: str = Field(..., min_length=1, max_length=80)
+    value: float
+
+
+class InsightsChartSeries(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    data: List[InsightsChartPoint] = Field(..., min_length=1, max_length=60)
+
+
+class InsightsChart(BaseModel):
+    id: str = Field(..., min_length=1, max_length=60)
+    title: str = Field(..., min_length=1, max_length=200)
+    # The only chart types the frontend can render (Recharts) — see
+    # design-system/kosh-ledger/MASTER.md §6. Never widen without a renderer.
+    type: Literal["bar", "line", "pie", "area"]
+    unit: Optional[str] = Field(None, max_length=20)
+    series: List[InsightsChartSeries] = Field(..., min_length=1, max_length=8)
+
+
+class InsightsPayload(BaseModel):
+    """The validated shape of an LLM's insights reply. Stored verbatim (as
+    JSON) once it passes validation here — this is the only gate between
+    freeform pasted text and the database."""
+
+    schema_version: int
+    verdict: str = Field(..., min_length=1, max_length=500)
+    findings: List[InsightsFinding] = Field(..., min_length=1, max_length=30)
+    charts: List[InsightsChart] = Field(default_factory=list, max_length=10)
+
+    @field_validator("schema_version")
+    @classmethod
+    def _check_schema_version(cls, v: int) -> int:
+        if v != INSIGHTS_SCHEMA_VERSION:
+            raise ValueError(
+                f"schema_version must be {INSIGHTS_SCHEMA_VERSION}, got {v}. "
+                "Regenerate the prompt and re-run the LLM."
+            )
+        return v
+
+
+class InsightsRunCreate(BaseModel):
+    period_start: date
+    period_end: date
+    payload: InsightsPayload
+
+
+class InsightsRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    schema_version: int
+    payload: InsightsPayload
+    period_start: date
+    period_end: date
+    ran_at: datetime

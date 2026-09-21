@@ -28,6 +28,7 @@ from app.routers import (
     persons,
     dashboard,
     tags,
+    insights,
 )
 
 logger = logging.getLogger("app")
@@ -70,6 +71,7 @@ app.include_router(persons.router)
 app.include_router(dashboard.router)
 app.include_router(tags.router)
 app.include_router(backup.router)
+app.include_router(insights.router)
 
 
 _LANDING_HTML = """<!doctype html>

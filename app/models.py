@@ -13,6 +13,7 @@ from datetime import date, datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy import (
+    JSON,
     UUID,
     Boolean,
     Date,
@@ -365,4 +366,36 @@ class UploadedFile(Base):
 
     raw_transactions: Mapped[List["RawTransaction"]] = relationship(
         back_populates="uploaded_file"
+    )
+
+
+# ─── Insights runs ────────────────────────────────────────────────────────────────────
+
+
+class InsightsRun(TimestampMixin, Base):
+    """The single LLM-generated insights run on file for a user.
+
+    Insights (/insights) no longer derives its numbers from an in-app formula —
+    the user copies a prompt (built from their own data) into an LLM of their
+    choice, pastes the JSON reply back, and this row is upserted with it. One
+    row per user: a new run replaces the old one outright, which is why
+    ``user_id`` is unique rather than this being an append-only log.
+
+    ``payload`` is the already-validated ``InsightsPayload`` (see
+    ``app/schemas.py``) stored verbatim as JSON — never raw/unvalidated input.
+    """
+
+    __tablename__ = "insights_runs"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_insights_runs_user"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    ran_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
     )
