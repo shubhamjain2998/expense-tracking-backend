@@ -24,6 +24,7 @@ from app.models import (
     BudgetPlan,
     Category,
     CategoryMapping,
+    CategoryMappingShare,
     Person,
     ProcessedTransaction,
     RawTransaction,
@@ -37,6 +38,7 @@ from app.schemas import (
     BackupExport,
     BackupImport,
     BackupImportResponse,
+    BackupMappingShare,
     BackupNamedEntity,
     BackupShare,
     BackupTransaction,
@@ -82,7 +84,13 @@ def export_user_data(user_id: uuid.UUID, db: Session) -> BackupExport:
         db.execute(
             select(CategoryMapping)
             .where(CategoryMapping.user_id == user_id)
-            .options(selectinload(CategoryMapping.category))
+            .options(
+                selectinload(CategoryMapping.category),
+                selectinload(CategoryMapping.tags),
+                selectinload(CategoryMapping.shares).selectinload(
+                    CategoryMappingShare.person
+                ),
+            )
             .order_by(CategoryMapping.description_pattern)
         )
         .scalars()
@@ -123,6 +131,15 @@ def export_user_data(user_id: uuid.UUID, db: Session) -> BackupExport:
             BackupCategoryMapping(
                 description_pattern=m.description_pattern,
                 category=m.category.name,
+                tags=[t.name for t in m.tags],
+                shares=[
+                    BackupMappingShare(
+                        person=sh.person.name,
+                        share_type=sh.share_type,
+                        share_value=Decimal(str(sh.share_value)),
+                    )
+                    for sh in m.shares
+                ],
             )
             for m in mappings
         ],
@@ -242,6 +259,13 @@ def import_user_data(
     for t in payload.transactions:
         person_names.update(s.person for s in t.shares)
 
+    # Rules carry tags and a split of their own, and a backup may name an
+    # entity that no transaction happens to use.
+    if payload.category_mappings is not None:
+        for m in payload.category_mappings:
+            tag_names.update(m.tags)
+            person_names.update(sh.person for sh in m.shares)
+
     # 2. Upsert reference entities.
     cats_by_name, cats_created = _upsert_categories(list(cat_names), user_id, db)
     tags_by_name, tags_created = _upsert_tags(list(tag_names), user_id, db)
@@ -285,6 +309,9 @@ def import_user_data(
 
     # 5. Insert transactions (raw + processed + shares + tag links).
     txns_imported = 0
+    # Rows created by this run, keyed by their exact stripped description.
+    # Step 7 uses it to re-link mapping_id once the rules exist.
+    imported_by_description: Dict[str, List[ProcessedTransaction]] = {}
     txns_skipped = 0
     derived_mappings: Dict[str, str] = (
         {}
@@ -388,6 +415,7 @@ def import_user_data(
 
         # Track for derived mappings (last write wins)
         derived_mappings[t.description.strip()] = cat_key
+        imported_by_description.setdefault(t.description.strip(), []).append(processed)
 
     # 6. Category mappings: explicit list wins; otherwise derived from transactions.
     mappings_to_create: List[BackupCategoryMapping]
@@ -434,6 +462,55 @@ def import_user_data(
             db.flush()
             existing_patterns[pattern] = new_mapping
             mappings_created += 1
+
+        # The rule's tags and split, when the backup carries them. Names are
+        # resolved against the entities imported above; anything unknown is
+        # reported rather than silently dropped.
+        if payload.category_mappings is None:
+            # Mappings were derived from transactions, so they say nothing
+            # about tags or splits. Leave whatever the rule already has.
+            continue
+
+        mapping_obj = existing_patterns[pattern]
+        mapping_obj.tags = [
+            tags_by_name[_norm(name)] for name in m.tags if _norm(name) in tags_by_name
+        ]
+        for name in m.tags:
+            if _norm(name) not in tags_by_name:
+                skipped_rows.append(
+                    f"category_mappings: unknown tag '{name}' "
+                    f"for pattern '{pattern}'"
+                )
+        mapping_shares = []
+        for sh in m.shares:
+            person = persons_by_name.get(_norm(sh.person))
+            if person is None:
+                skipped_rows.append(
+                    f"category_mappings: unknown person '{sh.person}' "
+                    f"for pattern '{pattern}'"
+                )
+                continue
+            mapping_shares.append(
+                CategoryMappingShare(
+                    mapping_id=mapping_obj.id,
+                    person_id=person.id,
+                    share_type=sh.share_type,
+                    share_value=float(sh.share_value),
+                )
+            )
+        mapping_obj.shares = mapping_shares
+    db.flush()
+
+    # 7. Re-link imported transactions to their rule.
+    #
+    # This used to be left as mapping_id=None, which quietly severed every
+    # restored row from the rule that describes it — the link auto-categorise
+    # writes and the UI reads. Matching is exact on the stripped description,
+    # never fuzzy: a restore must not invent a link the original data did not
+    # have.
+    for pattern, mapping_obj in existing_patterns.items():
+        for processed in imported_by_description.get(pattern, []):
+            processed.mapping_id = mapping_obj.id
 
     db.commit()
 

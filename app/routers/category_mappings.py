@@ -1,4 +1,9 @@
-"""Learned description-pattern → category rules used by auto-categorise."""
+"""Learned description-pattern → category rules used by auto-categorise.
+
+A rule carries three things, not one: the category, the tags, and the split.
+Auto-categorise applies all three, so editing a rule here changes what every
+future matching transaction looks like. See services/mapping_rules.py.
+"""
 
 import uuid
 from datetime import datetime, timezone
@@ -6,12 +11,13 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import Category, CategoryMapping
 from app.schemas import CategoryMappingCreate, CategoryMappingOut, CategoryMappingPatch
+from app.services.mapping_rules import set_mapping_context, validate_mapping_context
 
 router = APIRouter(prefix="/category-mappings", tags=["category-mappings"])
 
@@ -22,7 +28,15 @@ def list_mappings(
     user_id: uuid.UUID = Depends(get_current_user),
 ):
     rows = (
-        db.execute(select(CategoryMapping).where(CategoryMapping.user_id == user_id))
+        db.execute(
+            select(CategoryMapping)
+            .where(CategoryMapping.user_id == user_id)
+            .options(
+                selectinload(CategoryMapping.tags),
+                selectinload(CategoryMapping.shares),
+                selectinload(CategoryMapping.category),
+            )
+        )
         .scalars()
         .all()
     )
@@ -54,6 +68,10 @@ def create_mapping(
             status_code=404, detail=f"Category {body.category_id} not found"
         )
 
+    # Validate the rule's tags and split before writing anything, so a 404
+    # never leaves a category-only mapping behind.
+    validate_mapping_context(db, user_id, tag_ids=body.tag_ids, shares=body.shares)
+
     pattern = body.description_pattern.strip()
     existing = db.execute(
         select(CategoryMapping).where(
@@ -65,6 +83,9 @@ def create_mapping(
     if existing:
         existing.category_id = body.category_id
         existing.last_used = datetime.now(timezone.utc)
+        set_mapping_context(
+            db, existing, user_id, tag_ids=body.tag_ids, shares=body.shares
+        )
         db.commit()
         db.refresh(existing)
         return CategoryMappingOut.from_orm(existing)
@@ -77,6 +98,8 @@ def create_mapping(
         last_used=datetime.now(timezone.utc),
     )
     db.add(mapping)
+    db.flush()  # mapping.id, needed by the share rows
+    set_mapping_context(db, mapping, user_id, tag_ids=body.tag_ids, shares=body.shares)
     db.commit()
     db.refresh(mapping)
     return CategoryMappingOut.from_orm(mapping)
@@ -118,6 +141,8 @@ def update_mapping(
 
     if body.description_pattern is not None:
         mapping.description_pattern = body.description_pattern.strip()
+
+    set_mapping_context(db, mapping, user_id, tag_ids=body.tag_ids, shares=body.shares)
 
     db.commit()
     db.refresh(mapping)

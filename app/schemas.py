@@ -254,6 +254,7 @@ class ProcessTransactionRequest(BaseModel):
     category_id: uuid.UUID
     save_mapping: bool = False
     shares: List[PersonShareIn] = []
+    tag_ids: List[uuid.UUID] = []
     notes: Optional[str] = None
     # If set, becomes the processed txn's type. Otherwise falls back to the
     # raw row's txn_type, then to classify_txn_type. Lets the categorize UI
@@ -322,14 +323,40 @@ class MergeTransactionsResponse(BaseModel):
 # ─── Category mappings ────────────────────────────────────────────────────
 
 
+class MappingShareOut(BaseModel):
+    """A mapping's default split. No share_amount: that is per transaction."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    person_id: uuid.UUID
+    person_name: str
+    share_type: str
+    share_value: Decimal
+
+    @classmethod
+    def from_orm_share(cls, share: object) -> "MappingShareOut":
+        return cls(
+            person_id=share.person_id,
+            person_name=share.person.name,
+            share_type=share.share_type,
+            share_value=Decimal(str(share.share_value)),
+        )
+
+
 class CategoryMappingCreate(BaseModel):
     description_pattern: str = Field(..., min_length=1, max_length=500)
     category_id: uuid.UUID
+    tag_ids: List[uuid.UUID] = []
+    shares: List[PersonShareIn] = []
 
 
 class CategoryMappingPatch(BaseModel):
     description_pattern: Optional[str] = Field(None, min_length=1, max_length=500)
     category_id: Optional[uuid.UUID] = None
+    # None means "leave alone"; [] means "clear". Same convention as
+    # PatchProcessedTransactionRequest.tag_ids / .shares.
+    tag_ids: Optional[List[uuid.UUID]] = None
+    shares: Optional[List[PersonShareIn]] = None
 
 
 class CategoryMappingOut(BaseModel):
@@ -341,6 +368,8 @@ class CategoryMappingOut(BaseModel):
     category: str  # derived from relationship
     match_count: int
     last_used: Optional[datetime]
+    tags: List[TagOut] = []
+    shares: List[MappingShareOut] = []
 
     @classmethod
     def from_orm(cls, m: object) -> "CategoryMappingOut":
@@ -351,6 +380,8 @@ class CategoryMappingOut(BaseModel):
             category=m.category.name,
             match_count=m.match_count,
             last_used=m.last_used,
+            tags=[TagOut(id=t.id, name=t.name) for t in m.tags],
+            shares=[MappingShareOut.from_orm_share(s) for s in m.shares],
         )
 
 
@@ -428,6 +459,16 @@ class BackupBudgetPlan(BaseModel):
 class BackupCategoryMapping(BaseModel):
     description_pattern: str
     category: str
+    # Optional so older backup files still import: a file without these keys
+    # restores a category-only rule, exactly as it did before.
+    tags: List[str] = []
+    shares: List["BackupMappingShare"] = []
+
+
+class BackupMappingShare(BaseModel):
+    person: str
+    share_type: Literal["percentage", "amount"]
+    share_value: Decimal
 
 
 class BackupShare(BaseModel):

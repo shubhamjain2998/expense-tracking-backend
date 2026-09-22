@@ -141,6 +141,11 @@ class Tag(TimestampMixin, Base):
     processed_transactions: Mapped[List["ProcessedTransaction"]] = relationship(
         secondary=transaction_tags, back_populates="tags"
     )
+    # String form: the table object is defined further down, next to
+    # CategoryMapping, where it reads in context.
+    category_mappings: Mapped[List["CategoryMapping"]] = relationship(
+        secondary="category_mapping_tags", back_populates="tags"
+    )
 
 
 # ─── Person shares ────────────────────────────────────────────────────────────────
@@ -243,6 +248,24 @@ class RawTransaction(TimestampMixin, Base):
 # ─── Category mappings ────────────────────────────────────────────────────────────────
 
 
+category_mapping_tags = Table(
+    "category_mapping_tags",
+    Base.metadata,
+    Column(
+        "mapping_id",
+        UUID(as_uuid=True),
+        ForeignKey("category_mappings.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "tag_id",
+        UUID(as_uuid=True),
+        ForeignKey("tags.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
+
 class CategoryMapping(TimestampMixin, Base):
     __tablename__ = "category_mappings"
     __table_args__ = (
@@ -267,6 +290,45 @@ class CategoryMapping(TimestampMixin, Base):
     processed_transactions: Mapped[List["ProcessedTransaction"]] = relationship(
         back_populates="mapping"
     )
+    tags: Mapped[List["Tag"]] = relationship(
+        secondary=category_mapping_tags, back_populates="category_mappings"
+    )
+    shares: Mapped[List["CategoryMappingShare"]] = relationship(
+        back_populates="mapping",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class CategoryMappingShare(TimestampMixin, Base):
+    """Default split a mapping applies to every transaction it categorises.
+
+    Deliberately stores only share_type + share_value, never share_amount:
+    the money figure depends on the transaction's own total, so it is
+    recomputed per transaction by _build_share_records. Storing it here would
+    be a second source of truth that goes stale the first time a merchant
+    charges a different amount.
+    """
+
+    __tablename__ = "category_mapping_shares"
+
+    mapping_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("category_mappings.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    person_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("persons.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    share_type: Mapped[str] = mapped_column(
+        String, nullable=False
+    )  # percentage | amount
+    share_value: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+
+    mapping: Mapped["CategoryMapping"] = relationship(back_populates="shares")
+    person: Mapped["Person"] = relationship(back_populates="mapping_shares")
 
 
 # ─── Persons ──────────────────────────────────────────────────────────────────────────
@@ -284,6 +346,9 @@ class Person(TimestampMixin, Base):
 
     shares: Mapped[List["TransactionPersonShare"]] = relationship(
         back_populates="person"
+    )
+    mapping_shares: Mapped[List["CategoryMappingShare"]] = relationship(
+        back_populates="person", passive_deletes=True
     )
 
 

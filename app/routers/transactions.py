@@ -16,6 +16,11 @@ from rapidfuzz import fuzz
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
+from app.services.mapping_rules import (
+    mapping_share_inputs,
+    resolve_tags,
+    set_mapping_context,
+)
 from app.services.normalizer import normalize_description
 from app.services.period import (
     PeriodMode,
@@ -144,7 +149,12 @@ def _apply_sign_convention(processed: ProcessedTransaction) -> None:
 
 
 def _upsert_category_mapping(
-    db: Session, user_id: uuid.UUID, pattern: str, category_id: uuid.UUID
+    db: Session,
+    user_id: uuid.UUID,
+    pattern: str,
+    category_id: uuid.UUID,
+    tag_ids: Optional[List[uuid.UUID]] = None,
+    shares: Optional[List[PersonShareIn]] = None,
 ) -> uuid.UUID:
     """Point ``pattern`` at ``category_id``, creating the rule if needed.
 
@@ -173,6 +183,10 @@ def _upsert_category_mapping(
             with db.begin_nested():
                 db.add(new_mapping)
                 db.flush()
+                set_mapping_context(
+                    db, new_mapping, user_id, tag_ids=tag_ids, shares=shares
+                )
+                db.flush()
             return new_mapping.id
         except IntegrityError:
             existing = db.execute(
@@ -186,6 +200,7 @@ def _upsert_category_mapping(
 
     existing.category_id = category_id
     existing.last_used = datetime.now(timezone.utc)
+    set_mapping_context(db, existing, user_id, tag_ids=tag_ids, shares=shares)
     return existing.id
 
 
@@ -224,15 +239,7 @@ def _build_share_records(
 def _resolve_tags(
     tag_ids: List[uuid.UUID], user_id: uuid.UUID, db: Session
 ) -> List[Tag]:
-    tags = []
-    for tid in tag_ids:
-        tag = db.execute(
-            select(Tag).where(Tag.id == tid, Tag.user_id == user_id)
-        ).scalar_one_or_none()
-        if tag is None:
-            raise HTTPException(status_code=404, detail=f"Tag {tid} not found")
-        tags.append(tag)
-    return tags
+    return resolve_tags(tag_ids, user_id, db)
 
 
 # ─── Raw transactions ─────────────────────────────────────────────────────────────────
@@ -426,6 +433,12 @@ def auto_categorise(
     )
     auto_categorised = 0
 
+    # Normalise each pattern once, not once per pending row: this loop is
+    # O(pending x mappings) and a full statement import hits both counts hard.
+    normalised_patterns = [
+        (m, normalize_description(m.description_pattern)) for m in mappings
+    ]
+
     for txn in pending:
         if not mappings:
             break
@@ -433,16 +446,18 @@ def auto_categorise(
         normalised_desc = normalize_description(txn.description)
         best_score = 0
         best_mapping = None
-        for mapping in mappings:
-            score = fuzz.token_sort_ratio(
-                normalised_desc,
-                normalize_description(mapping.description_pattern),
-            )
+        for mapping, normalised_pattern in normalised_patterns:
+            score = fuzz.token_sort_ratio(normalised_desc, normalised_pattern)
             if score > best_score:
                 best_score = score
                 best_mapping = mapping
 
         if best_score >= 80 and best_mapping is not None:
+            total = Decimal(str(txn.amount))
+            # A mapping is a whole rule, not just a category: whatever split it
+            # carries decides this row's effective_amount, exactly as the
+            # user-entered split does in POST /process.
+            rule_shares = mapping_share_inputs(best_mapping)
             processed = ProcessedTransaction(
                 user_id=user_id,
                 raw_txn_id=txn.id,
@@ -455,7 +470,7 @@ def auto_categorise(
                 ),
                 description=txn.description,
                 amount=txn.amount,
-                effective_amount=txn.amount,
+                effective_amount=float(_compute_effective_amount(total, rule_shares)),
                 month=txn.txn_date.month,
                 year=txn.txn_date.year,
                 txn_type=(
@@ -464,6 +479,17 @@ def auto_categorise(
                 ),
             )
             db.add(processed)
+            db.flush()  # processed.id, needed by the share rows below
+
+            processed.tags = list(best_mapping.tags)
+            for record in _build_share_records(
+                processed.id, total, rule_shares, user_id, db
+            ):
+                db.add(record)
+            db.flush()
+
+            # Sign last: it re-signs amount, effective_amount and every share
+            # row, so the shares have to exist by now.
             _apply_sign_convention(processed)
             txn.status = "processed"
             best_mapping.match_count += 1
@@ -543,8 +569,16 @@ def process_transaction(
 
     mapping_id = None
     if body.save_mapping:
+        # The rule learns everything the user just chose, not only the
+        # category — that is what makes the next matching row arrive already
+        # tagged and already split.
         mapping_id = _upsert_category_mapping(
-            db, user_id, txn.description.strip(), body.category_id
+            db,
+            user_id,
+            txn.description.strip(),
+            body.category_id,
+            tag_ids=body.tag_ids,
+            shares=body.shares,
         )
 
     processed = ProcessedTransaction(
@@ -570,6 +604,9 @@ def process_transaction(
     )
     db.add(processed)
     db.flush()
+
+    if body.tag_ids:
+        processed.tags = _resolve_tags(body.tag_ids, user_id, db)
 
     for record in _build_share_records(processed.id, total, body.shares, user_id, db):
         db.add(record)
@@ -912,6 +949,26 @@ def patch_processed_transaction(
 
     db.flush()
     _apply_sign_convention(processed)
+
+    if body.save_mapping:
+        # "Save as rule" from the edit panel. The rule is written from the row's
+        # final state, so it carries the same category, tags and split the user
+        # is looking at — the same contract POST /process honours.
+        processed.mapping_id = _upsert_category_mapping(
+            db,
+            user_id,
+            processed.description.strip(),
+            processed.category_id,
+            tag_ids=[t.id for t in processed.tags],
+            shares=[
+                PersonShareIn(
+                    person_id=sh.person_id,
+                    share_type=sh.share_type,
+                    share_value=abs(Decimal(str(sh.share_value))),
+                )
+                for sh in processed.shares
+            ],
+        )
 
     db.commit()
     db.refresh(processed)
