@@ -291,6 +291,34 @@ class BulkTagRequest(BaseModel):
     tag_ids: List[uuid.UUID]
 
 
+class MergeMember(BaseModel):
+    """One row taking part in a merge, addressed the way the list shows it."""
+
+    kind: Literal["pending", "processed"]
+    id: uuid.UUID
+
+
+class MergeTransactionsRequest(BaseModel):
+    """Club several statement lines into a single row.
+
+    ``base`` keeps its date and description (and, when it is a processed row,
+    its category, tags, notes and splits); every row in ``sources`` hands over
+    its amount and is then soft-deleted, so a wrong merge stays recoverable
+    from the "Show N deleted" bucket.
+    """
+
+    base: MergeMember
+    sources: List[MergeMember] = Field(..., min_length=1)
+
+
+class MergeTransactionsResponse(BaseModel):
+    kind: Literal["pending", "processed"]
+    raw_txn_id: uuid.UUID
+    processed_id: Optional[uuid.UUID] = None
+    amount: Decimal
+    merged_count: int
+
+
 # ─── Category mappings ────────────────────────────────────────────────────
 
 

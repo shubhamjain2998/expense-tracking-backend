@@ -14,6 +14,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from rapidfuzz import fuzz
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
 from app.services.normalizer import normalize_description
 from app.services.period import (
@@ -40,6 +41,9 @@ from app.schemas import (
     AutoCategoriseResponse,
     BulkTagRequest,
     CreateRawTransactionRequest,
+    MergeMember,
+    MergeTransactionsRequest,
+    MergeTransactionsResponse,
     PatchProcessedTransactionRequest,
     PatchShareSettledRequest,
     PersonShareIn,
@@ -137,6 +141,52 @@ def _apply_sign_convention(processed: ProcessedTransaction) -> None:
     )
     for share in processed.shares:
         share.share_amount = float(sign * abs(Decimal(str(share.share_amount))))
+
+
+def _upsert_category_mapping(
+    db: Session, user_id: uuid.UUID, pattern: str, category_id: uuid.UUID
+) -> uuid.UUID:
+    """Point ``pattern`` at ``category_id``, creating the rule if needed.
+
+    Read-then-insert is not enough here. Categorising a multi-row selection
+    fires one /process per row in parallel, and rows that share a description
+    (two "Urbanclap Technologi" lines, say) then race: both see no mapping,
+    both insert, and the loser hits uq_category_mappings_user_pattern — the
+    user saw one row categorised and the other fail with a 500. The savepoint
+    turns that loss into a re-read of the row the winner just wrote.
+    """
+    existing = db.execute(
+        select(CategoryMapping).where(
+            CategoryMapping.description_pattern == pattern,
+            CategoryMapping.user_id == user_id,
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        new_mapping = CategoryMapping(
+            user_id=user_id,
+            description_pattern=pattern,
+            category_id=category_id,
+            match_count=0,
+            last_used=datetime.now(timezone.utc),
+        )
+        try:
+            with db.begin_nested():
+                db.add(new_mapping)
+                db.flush()
+            return new_mapping.id
+        except IntegrityError:
+            existing = db.execute(
+                select(CategoryMapping).where(
+                    CategoryMapping.description_pattern == pattern,
+                    CategoryMapping.user_id == user_id,
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                raise
+
+    existing.category_id = category_id
+    existing.last_used = datetime.now(timezone.utc)
+    return existing.id
 
 
 def _build_share_records(
@@ -493,28 +543,9 @@ def process_transaction(
 
     mapping_id = None
     if body.save_mapping:
-        pattern = txn.description.strip()
-        existing = db.execute(
-            select(CategoryMapping).where(
-                CategoryMapping.description_pattern == pattern,
-                CategoryMapping.user_id == user_id,
-            )
-        ).scalar_one_or_none()
-        if existing:
-            existing.category_id = body.category_id
-            existing.last_used = datetime.now(timezone.utc)
-            mapping_id = existing.id
-        else:
-            new_mapping = CategoryMapping(
-                user_id=user_id,
-                description_pattern=pattern,
-                category_id=body.category_id,
-                match_count=0,
-                last_used=datetime.now(timezone.utc),
-            )
-            db.add(new_mapping)
-            db.flush()
-            mapping_id = new_mapping.id
+        mapping_id = _upsert_category_mapping(
+            db, user_id, txn.description.strip(), body.category_id
+        )
 
     processed = ProcessedTransaction(
         user_id=user_id,
@@ -606,6 +637,197 @@ def delete_processed_transaction(
     db.flush()
     _purge_expired_soft_deletes(db, user_id)
     db.commit()
+
+
+@router.post("/processed/{id}/unprocess", response_model=RawTransactionOut)
+def unprocess_transaction(
+    id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+):
+    """Send a processed transaction back to Needs review.
+
+    The counterpart to /process, and deliberately not the same as DELETE
+    /processed/{id}: delete throws the statement line away too, which left no
+    way to re-examine a row that was categorised by mistake. Here the raw row
+    returns to ``pending`` with its amount and description intact, and only
+    the processed row (with its splits and tag links) goes away. Any category
+    mapping the original /process saved is left alone — it is a rule about the
+    description, not about this one row.
+    """
+    processed = db.execute(
+        select(ProcessedTransaction).where(
+            ProcessedTransaction.id == id,
+            ProcessedTransaction.user_id == user_id,
+        )
+    ).scalar_one_or_none()
+    if processed is None:
+        raise HTTPException(status_code=404, detail="Processed transaction not found")
+
+    raw = db.get(RawTransaction, processed.raw_txn_id)
+    if raw is None or raw.user_id != user_id:
+        raise HTTPException(
+            status_code=409, detail="Original statement line is no longer available"
+        )
+
+    db.delete(processed)
+    db.flush()
+    raw.status = "pending"
+    raw.deleted_at = None
+    db.commit()
+    db.refresh(raw)
+    return RawTransactionOut.model_validate(raw)
+
+
+def _merge_amount(kind: str, row) -> Decimal:
+    """Magnitude of a row's amount, sign stripped.
+
+    Raw rows carry the parser's sign (positive = debit) and processed rows
+    carry the storage convention (expense > 0, income < 0), so the two cannot
+    be added directly. Merge sums magnitudes and re-applies the base row's
+    sign at the end.
+    """
+    return abs(Decimal(str(row.amount)))
+
+
+def _merge_direction(kind: str, row) -> str:
+    """ "debit" or "credit" — money out or money in.
+
+    Merging across the two would silently cancel amounts out, so it is
+    rejected instead.
+    """
+    if kind == "processed":
+        return "credit" if _sign_for(row.txn_type) < 0 else "debit"
+    if row.txn_type is not None:
+        return "credit" if _sign_for(row.txn_type) < 0 else "debit"
+    return "credit" if Decimal(str(row.amount)) < 0 else "debit"
+
+
+def _resolve_merge_member(
+    member: MergeMember, db: Session, user_id: uuid.UUID
+) -> object:
+    if member.kind == "pending":
+        raw = db.execute(
+            select(RawTransaction).where(
+                RawTransaction.id == member.id,
+                RawTransaction.user_id == user_id,
+            )
+        ).scalar_one_or_none()
+        if raw is None:
+            raise HTTPException(
+                status_code=404, detail=f"Transaction {member.id} not found"
+            )
+        if raw.status != "pending":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Transaction {member.id} is {raw.status}, not pending",
+            )
+        return raw
+
+    processed = db.execute(
+        select(ProcessedTransaction).where(
+            ProcessedTransaction.id == member.id,
+            ProcessedTransaction.user_id == user_id,
+        )
+    ).scalar_one_or_none()
+    if processed is None:
+        raise HTTPException(
+            status_code=404, detail=f"Transaction {member.id} not found"
+        )
+    return processed
+
+
+@router.post("/merge", response_model=MergeTransactionsResponse)
+def merge_transactions(
+    body: MergeTransactionsRequest,
+    db: Session = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user),
+):
+    """Club several rows for one real-world payment into a single row.
+
+    The base row keeps its date and description; the sources hand over their
+    amounts and are soft-deleted, so the merge can be undone from the deleted
+    bucket. A processed base keeps its category, tags, notes and splits, with
+    percentage splits recomputed against the new total.
+    """
+    members = [body.base, *body.sources]
+    seen: set[tuple[str, uuid.UUID]] = set()
+    for member in members:
+        key = (member.kind, member.id)
+        if key in seen:
+            raise HTTPException(
+                status_code=400, detail="A transaction cannot be merged into itself"
+            )
+        seen.add(key)
+
+    base_row = _resolve_merge_member(body.base, db, user_id)
+    source_rows = [_resolve_merge_member(m, db, user_id) for m in body.sources]
+
+    directions = {_merge_direction(body.base.kind, base_row)} | {
+        _merge_direction(m.kind, row) for m, row in zip(body.sources, source_rows)
+    }
+    if len(directions) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot merge money-in and money-out transactions together",
+        )
+
+    total = _merge_amount(body.base.kind, base_row) + sum(
+        (_merge_amount(m.kind, row) for m, row in zip(body.sources, source_rows)),
+        Decimal("0"),
+    )
+
+    # Fold the sources away first: a processed source loses its processed row
+    # and its raw goes to the deleted bucket, exactly as DELETE
+    # /processed/{id} does, so Restore behaves the way users already know.
+    for member, row in zip(body.sources, source_rows):
+        if member.kind == "processed":
+            raw = db.get(RawTransaction, row.raw_txn_id)
+            if raw is not None:
+                raw.status = "deleted"
+                raw.deleted_at = datetime.now(timezone.utc)
+            db.delete(row)
+        else:
+            row.status = "deleted"
+            row.deleted_at = datetime.now(timezone.utc)
+    db.flush()
+
+    if body.base.kind == "pending":
+        # Preserve the raw row's own sign convention (negative = credit).
+        sign = -1 if Decimal(str(base_row.amount)) < 0 else 1
+        base_row.amount = float(sign * total)
+        db.commit()
+        db.refresh(base_row)
+        return MergeTransactionsResponse(
+            kind="pending",
+            raw_txn_id=base_row.id,
+            processed_id=None,
+            amount=Decimal(str(base_row.amount)),
+            merged_count=len(members),
+        )
+
+    base_row.amount = float(total)
+    # Percentage splits follow the new total; fixed-amount splits do not.
+    for share in base_row.shares:
+        if share.share_type == "percentage":
+            share.share_amount = float(
+                total * Decimal(str(share.share_value)) / Decimal("100")
+            )
+    others_total = sum(
+        (abs(Decimal(str(s.share_amount))) for s in base_row.shares), Decimal("0")
+    )
+    base_row.effective_amount = float(total - others_total)
+    db.flush()
+    _apply_sign_convention(base_row)
+    db.commit()
+    db.refresh(base_row)
+    return MergeTransactionsResponse(
+        kind="processed",
+        raw_txn_id=base_row.raw_txn_id,
+        processed_id=base_row.id,
+        amount=Decimal(str(base_row.amount)),
+        merged_count=len(members),
+    )
 
 
 @router.patch("/processed/{id}", response_model=ProcessedTransactionOut)
