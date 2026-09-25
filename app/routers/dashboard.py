@@ -187,7 +187,8 @@ def monthly_trend(
 def multi_month_summary(
     end_year: int,
     end_month: int = Query(..., ge=1, le=12),
-    months: int = Query(6, ge=1, le=12),
+    # The Home trend offers a 15-month window; 24 leaves headroom.
+    months: int = Query(6, ge=1, le=24),
     tag_id: Optional[uuid.UUID] = None,
     db: Session = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user),
