@@ -77,6 +77,10 @@ def get_budget(
             select(BudgetPlan).where(
                 BudgetPlan.year == year, BudgetPlan.user_id == user_id
             )
+            # Without an ORDER BY, Postgres hands back an updated row last
+            # (MVCC writes a new tuple), so editing an amount moved that
+            # category to the end of the Budget page.
+            .order_by(BudgetPlan.created_at, BudgetPlan.id)
         )
         .scalars()
         .all()
